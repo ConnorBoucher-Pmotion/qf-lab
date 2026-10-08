@@ -1,460 +1,190 @@
 import { useRef, useState } from "react";
+import { ALGORITHM_INFO } from "../tl/tlRotation";
 import {
-  PROVISIONAL_QF_CONFIG,
-  QF_CONFIG_FIELDS,
-  QF_CONFIG_GROUPS,
+  TL_CONFIG,
+  TL_CONFIG_FIELDS,
+  TL_CONFIG_GROUPS,
   configExport,
   configImport,
   configProblems,
   normalizeConfig,
-  type QFConfig,
-} from "../qf/qfConfig";
-import { ANGLE_METHODS, ANGLE_METHOD_INFO } from "../qf/qfMeasurementEngine";
-import type { ConstraintCheck, QFSnapshot } from "../qf/qfTypes";
+  type ConfigField,
+  type TLConfig,
+} from "../tl/tlConfig";
+import type { TLSnapshot } from "../tl/tlTypes";
 import type { RecorderStatus } from "../recording/trialRecorder";
 import { download } from "../storage/trials";
 
 type Props = {
   open: boolean;
-  config: QFConfig;
-  snapshot: QFSnapshot | null;
+  config: TLConfig;
+  snapshot: TLSnapshot | null;
   recorder: RecorderStatus | null;
   preRollMs: number;
   postRollMs: number;
   onPreRoll: (ms: number) => void;
   onPostRoll: (ms: number) => void;
   onToggle: () => void;
-  onChange: (config: QFConfig) => void;
+  onChange: (config: TLConfig) => void;
 };
 
-const TABS = ["Diagnostics", "Constraints", "Filters", "Config"] as const;
-type Tab = (typeof TABS)[number];
-const FILTER_GROUPS = new Set(["Stable hold", "Smoothing & outliers", "Tracking confidence"]);
-
-export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRollMs, onPreRoll, onPostRoll, onToggle, onChange }: Props) {
+export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRollMs, onToggle, onChange, onPreRoll, onPostRoll }: Props) {
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const [tab, setTab] = useState<Tab>("Diagnostics");
+  const [tab, setTab] = useState<"Diagnostics" | "Config">("Diagnostics");
+  const problems = configProblems(config);
+  const metrics = snapshot?.metrics;
   return (
     <section className="debug">
       <button type="button" className="debug-toggle" onClick={onToggle}>
         Developer / debug {open ? "▴" : "▾"}
       </button>
       <div className="debug-body" hidden={!open}>
-          <p className="provisional">
-            Development thresholds, not clinically validated. Hard checks reject a trial; soft checks only lower confidence and are saved with the trial.
-          </p>
-          <div className="tabs">
-            {TABS.map((name) => (
-              <button key={name} type="button" className={tab === name ? "on" : ""} onClick={() => setTab(name)}>
-                {name}
-              </button>
-            ))}
-          </div>
-          <div hidden={tab !== "Diagnostics"}>
-            <RecordingPanel recorder={recorder} preRollMs={preRollMs} postRollMs={postRollMs} onPreRoll={onPreRoll} onPostRoll={onPostRoll} />
-            <StatePanel snapshot={snapshot} config={config} />
-            <AnglesPanel snapshot={snapshot} />
-            <HoldPanel snapshot={snapshot} />
-            <TrackingPanel snapshot={snapshot} />
-            <CameraPanel snapshot={snapshot} />
-            <PelvisTranslationPanel snapshot={snapshot} />
-          </div>
-          <div hidden={tab !== "Constraints"}>
-            <ChecksTable title="A · Setup (start gate)" checks={snapshot?.setupChecks ?? []} mode="setup" config={config} onChange={onChange} />
-            <ChecksTable title="B–D · Measurement (vs baseline)" checks={snapshot?.checks ?? []} mode="measure" config={config} onChange={onChange} />
-          </div>
-          <div className="row" hidden={tab !== "Filters" && tab !== "Config"}>
-            <button type="button" onClick={() => onChange(normalizeConfig(PROVISIONAL_QF_CONFIG))}>
-              Reset to defaults
+        <p className="provisional">Development thresholds, not clinically validated. Changing a value updates the next frame of the live assessment.</p>
+        <p className="muted small">{snapshot?.cameraNote}</p>
+        <div className="tabs">
+          {(["Diagnostics", "Config"] as const).map((name) => (
+            <button key={name} type="button" className={tab === name ? "on" : ""} onClick={() => setTab(name)}>
+              {name}
             </button>
-            <button type="button" onClick={() => download(`qf-config-${stamp()}.json`, configExport(config))}>
-              Export config
-            </button>
-            <button type="button" onClick={() => fileRef.current?.click()}>
-              Import config
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json"
-              hidden
-              onChange={async (event) => {
-                const file = event.target.files?.[0];
-                if (!file) return;
-                try {
-                  onChange(configImport(await file.text()));
-                } catch {
-                  alert("That file is not a QF lab config.");
-                }
-                event.target.value = "";
-              }}
-            />
-          </div>
-          <ul className="config-problems" hidden={tab !== "Config" || configProblems(config).length === 0}>
-            {configProblems(config).map((problem) => (
-              <li key={problem}>{problem}</li>
-            ))}
-          </ul>
-          <div className="control-grid" hidden={tab !== "Filters" && tab !== "Config"}>
-            {QF_CONFIG_GROUPS.filter((group) => (tab === "Filters" ? FILTER_GROUPS.has(group) : !FILTER_GROUPS.has(group))).map((group) => (
+          ))}
+        </div>
+        {tab === "Diagnostics" ? (
+          <>
+            <h3>Live</h3>
+            <dl className="readout">
+              <Item label="State" value={snapshot?.state ?? "—"} />
+              <Item label="Algorithm" value={snapshot ? ALGORITHM_INFO[snapshot.algorithm].label : "—"} />
+              <Item label="Frame rate" value={snapshot ? String(snapshot.fps) : "—"} />
+              <Item label="Record" value={recorder ? `${recorder.phase} · pose ${recorder.poseFps} · video ${recorder.recordFps}` : "—"} />
+              <Item label="Raw rotation" value={deg(snapshot?.rom.raw)} />
+              <Item label="Filtered rotation" value={deg(snapshot?.rom.filtered)} />
+              <Item label="Velocity" value={metrics?.velocityDegPerSec == null ? "—" : `${metrics.velocityDegPerSec.toFixed(1)} °/s`} />
+              <Item label="Shoulder yaw" value={deg(metrics?.shoulderYawDeg)} />
+              <Item label="Pelvis yaw" value={deg(metrics?.pelvisYawDeg)} />
+              <Item label="Head yaw" value={deg(metrics?.headYawDeg)} />
+              <Item label="A shoulder vs neutral" value={deg(metrics?.algorithms.shoulderNeutral)} />
+              <Item label="B shoulder vs pelvis" value={deg(metrics?.algorithms.shoulderVsPelvis)} />
+              <Item label="C world torso" value={deg(metrics?.algorithms.worldTorso)} />
+              <Item label="D image depth" value={deg(metrics?.algorithms.imageDepth)} />
+              <Item label="2D line delta (not ROM)" value={deg(metrics?.imageLineDeltaDeg)} />
+              <Item label="Pelvis rotation" value={deg(metrics?.pelvisRotationDeg)} />
+              <Item label="Pelvis translation" value={pct(metrics?.pelvisTranslationPct)} />
+              <Item label="Lateral lean" value={deg(metrics?.lateralLeanDeg)} />
+              <Item label="Forward lean" value={deg(metrics?.forwardLeanDeg)} />
+              <Item label="Knee shift" value={pct(metrics?.kneeShiftPct)} />
+              <Item label="Hip shift" value={pct(metrics?.hipShiftPct)} />
+              <Item label="Shoulder tilt" value={deg(metrics?.shoulderTiltDeg)} />
+              <Item label="Head vs torso" value={deg(metrics?.headLeadDeg)} />
+              <Item label="Shoulder confidence" value={num(snapshot?.tracking.shoulders)} />
+              <Item label="Hip confidence" value={num(snapshot?.tracking.hips)} />
+              <Item label="Knee confidence" value={num(snapshot?.tracking.knees)} />
+              <Item label="Pre-roll" value={`${preRollMs} ms`} />
+              <Item label="Post-roll" value={`${postRollMs} ms`} />
+            </dl>
+            <h3>Landmarks</h3>
+            <dl className="readout">
+              <VecItem label="Left shoulder" point={metrics?.leftShoulder} />
+              <VecItem label="Right shoulder" point={metrics?.rightShoulder} />
+              <VecItem label="Left hip" point={metrics?.leftHip} />
+              <VecItem label="Right hip" point={metrics?.rightHip} />
+              <VecItem label="Shoulder midpoint" point={metrics?.shoulderMid} />
+              <VecItem label="Hip midpoint" point={metrics?.hipMid} />
+              <VecItem label="Shoulder vector" point={metrics?.shoulderVector} />
+              <VecItem label="Pelvis vector" point={metrics?.pelvisVector} />
+            </dl>
+            <p className="muted small">{snapshot ? ALGORITHM_INFO[snapshot.algorithm].note : ""}</p>
+            <label className="slider">
+              <span>Video pre-roll <b>{preRollMs} ms</b></span>
+              <input type="range" min={0} max={4000} step={100} value={preRollMs} onChange={(event) => onPreRoll(Number(event.target.value))} />
+            </label>
+            <label className="slider">
+              <span>Video post-roll <b>{postRollMs} ms</b></span>
+              <input type="range" min={0} max={3000} step={100} value={postRollMs} onChange={(event) => onPostRoll(Number(event.target.value))} />
+            </label>
+          </>
+        ) : (
+          <>
+            {problems.length > 0 ? (
+              <ul className="config-problems">
+                {problems.map((problem) => (
+                  <li key={problem}>{problem}</li>
+                ))}
+              </ul>
+            ) : null}
+            {TL_CONFIG_GROUPS.map((group) => (
               <fieldset key={group}>
                 <legend>{group}</legend>
-                {QF_CONFIG_FIELDS.filter((field) => field.group === group).map((field) =>
-                  field.kind === "select" ? (
-                    <label key={field.key} className="slider">
-                      <span>{field.label}</span>
-                      <select value={config[field.key]} onChange={(event) => onChange({ ...config, [field.key]: event.target.value })}>
-                        {field.options.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : (
-                    <label key={field.key} className="slider">
-                      <span>
-                        {field.label}
-                        <b>{formatField(field, config[field.key])}</b>
-                      </span>
-                      <input
-                        type="range"
-                        min={field.min}
-                        max={field.max}
-                        step={field.step}
-                        value={config[field.key]}
-                        onChange={(event) => {
-                          const next = Number(event.target.value);
-                          if (!Number.isFinite(next)) return;
-                          onChange({ ...config, [field.key]: next });
-                        }}
-                      />
-                    </label>
-                  )
-                )}
+                {TL_CONFIG_FIELDS.filter((field) => field.group === group).map((field) => (
+                  <Field key={field.key} field={field} config={config} onChange={onChange} />
+                ))}
               </fieldset>
             ))}
-          </div>
+            <div className="row wrap">
+              <button type="button" onClick={() => onChange(normalizeConfig(TL_CONFIG))}>
+                Reset defaults
+              </button>
+              <button type="button" onClick={() => download("tl-junction-config.json", configExport(config))}>
+                Export
+              </button>
+              <button type="button" onClick={() => fileRef.current?.click()}>
+                Import
+              </button>
+              <input
+                ref={fileRef}
+                hidden
+                type="file"
+                accept="application/json"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  void file.text().then((text) => onChange(configImport(text)));
+                }}
+              />
+            </div>
+          </>
+        )}
       </div>
     </section>
   );
 }
 
-function RecordingPanel({
-  recorder,
-  preRollMs,
-  postRollMs,
-  onPreRoll,
-  onPostRoll,
-}: {
-  recorder: RecorderStatus | null;
-  preRollMs: number;
-  postRollMs: number;
-  onPreRoll: (ms: number) => void;
-  onPostRoll: (ms: number) => void;
-}) {
-  const phase = recorder?.phase ?? "off";
-  const label = phase === "keep" || phase === "post" ? "Recording trial" : phase === "preroll" ? "Watching the start" : phase === "unavailable" ? "Unavailable" : "Idle";
-  return (
-    <div className="debug-block">
-      <h3>Recording</h3>
-      <dl className="readout">
-        <Row label="Status" value={recorder?.message || label} />
-        <Row label="Pose frames / second" value={recorder ? String(recorder.poseFps) : "—"} />
-        <Row label="Recorded frames / second" value={recorder && phase !== "off" && phase !== "unavailable" ? String(recorder.recordFps) : "—"} />
-        <Row label="Slow pose gaps (over 50 ms)" value={recorder ? String(recorder.slowFrames) : "—"} />
-      </dl>
+function Field({ field, config, onChange }: { field: ConfigField; config: TLConfig; onChange: (config: TLConfig) => void }) {
+  if (field.kind === "select") {
+    return (
       <label className="slider">
-        <span>
-          Seconds of video before the movement
-          <b>{(preRollMs / 1000).toFixed(1)} s</b>
-        </span>
-        <input type="range" min={0} max={3000} step={100} value={preRollMs} onChange={(event) => onPreRoll(Number(event.target.value))} />
-      </label>
-      <label className="slider">
-        <span>
-          Seconds of video after the result
-          <b>{(postRollMs / 1000).toFixed(1)} s</b>
-        </span>
-        <input type="range" min={0} max={3000} step={100} value={postRollMs} onChange={(event) => onPostRoll(Number(event.target.value))} />
-      </label>
-    </div>
-  );
-}
-
-function StatePanel({ snapshot, config }: { snapshot: QFSnapshot | null; config: QFConfig }) {
-  const hard = snapshot?.checks.filter((c) => c.category === "hard" && c.status === "fail") ?? [];
-  const soft = snapshot?.checks.filter((c) => c.category === "soft" && (c.status === "warn" || c.status === "fail")) ?? [];
-  const blocking = snapshot?.setupChecks.filter((c) => c.blocking && c.status === "fail") ?? [];
-  return (
-    <div className="debug-block">
-      <h3>State</h3>
-      <dl className="readout">
-        <Row label="Current state" value={snapshot?.state ?? "—"} />
-        <Row label="Instruction" value={snapshot?.instruction ?? "—"} />
-        <Row label="Baseline QF angle" value={deg(snapshot?.movement.baselineDeg)} />
-        <Row label="Current QF angle" value={deg(snapshot?.primary.filtered)} />
-        <Row label="Excursion from baseline" value={deg(snapshot?.movement.excursionDeg)} />
-        <Row label="Angular velocity" value={snapshot?.movement.velocityDegPerSec == null ? "—" : `${snapshot.movement.velocityDegPerSec.toFixed(1)} °/s`} />
-        <Row label="Movement start threshold" value={`${config.startMovementDeg.toFixed(1)}°`} />
-        <Row label="Minimum excursion" value={`${config.minimumMovementExcursionDeg.toFixed(1)}°`} />
-        <Row label="Movement started" value={snapshot ? (snapshot.movement.started ? "YES" : "NO") : "—"} />
-        <Row label="Blocking setup fails" value={blocking.map((c) => c.label).join(", ") || "none"} />
-        <Row label="Hard fails" value={hard.map((c) => c.label).join(", ") || "none"} />
-        <Row label="Soft warnings" value={soft.map((c) => `${c.label} (${c.status})`).join(", ") || "none"} />
-        <Row label="Confidence score" value={snapshot?.baseline ? String(snapshot.quality) : "—"} />
-        <Row label="Result" value={snapshot?.result ? (snapshot.result.accepted ? "accepted" : `rejected: ${snapshot.result.failedConstraints.join(", ")}`) : "—"} />
-      </dl>
-    </div>
-  );
-}
-
-function AnglesPanel({ snapshot }: { snapshot: QFSnapshot | null }) {
-  const primary = snapshot?.primaryMethod;
-  return (
-    <div className="debug-block">
-      <h3>Angles</h3>
-      <table className="debug-table">
-        <thead>
-          <tr>
-            <th>Method</th>
-            <th>Raw</th>
-            <th>Clean</th>
-            <th>Filtered</th>
-            <th>Stable</th>
-            <th>Final</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ANGLE_METHODS.map((method) => (
-            <tr key={method} className={method === primary ? "primary-row" : ""} title={ANGLE_METHOD_INFO[method].note}>
-              <td>
-                {ANGLE_METHOD_INFO[method].label}
-                {method === primary ? " ★" : ""}
-              </td>
-              <td>{deg(snapshot?.angles.raw[method])}</td>
-              <td>{deg(snapshot?.angles.clean[method])}</td>
-              <td>{deg(snapshot?.angles.filtered[method])}</td>
-              <td>{method === primary ? deg(snapshot?.primary.stable) : "—"}</td>
-              <td>{deg(snapshot?.result?.angles[method])}</td>
-            </tr>
+        <span>{field.label}</span>
+        <select
+          value={String(config[field.key])}
+          onChange={(event) => onChange(normalizeConfig({ ...config, [field.key]: event.target.value }))}
+        >
+          {field.options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
           ))}
-        </tbody>
-      </table>
-      <p className="muted small">
-        Raw: unfiltered MediaPipe. Clean: spike-gated landmarks, outlier-tested angle. Filtered: smoothed (drives state). Stable: median of the current hold run. Final: median of clean
-        frames in the accepted hold. ★ is the primary method.
-      </p>
-    </div>
-  );
-}
-
-function HoldPanel({ snapshot }: { snapshot: QFSnapshot | null }) {
-  const h = snapshot?.hold;
-  const s = snapshot?.calibrationStillness;
+        </select>
+      </label>
+    );
+  }
+  const value = config[field.key];
   return (
-    <div className="debug-block">
-      <h3>Hold & calibration</h3>
-      <dl className="readout">
-        <Row label="Hold run" value={h ? `${Math.round(h.runMs)} ms · ${h.runFrames} frames` : "—"} />
-        <Row label="Run range" value={h ? `${h.rangeDeg.toFixed(2)}°` : "—"} />
-        <Row label="Run drift" value={h?.slopeDegPerSec != null ? `${h.slopeDegPerSec.toFixed(2)} °/s ${h.slopeOk ? "ok" : "too fast"}` : "—"} />
-        <Row label="Attempt peak (filtered)" value={deg(h?.peakDeg)} />
-        <Row label="Near end range" value={h ? (h.nearPeak ? "yes" : "no") : "—"} />
-        <Row label="Hold progress" value={h ? `${Math.round(h.progress * 100)}%` : "—"} />
-        <Row label="Raw maximum (never used)" value={deg(snapshot?.result?.rawMaximum)} />
-        <Row label="Calibration" value={snapshot ? `${Math.round(snapshot.calibrationProgress * 100)}%` : "—"} />
-        <Row label="Calibration shank SD" value={s ? `${s.shankSdDeg.toFixed(2)}°` : "—"} />
-        <Row label="Calibration jitter (pelvis/knee/ankle)" value={s ? `${s.pelvisJitter.toFixed(3)} / ${s.kneeJitter.toFixed(3)} / ${s.ankleJitter.toFixed(3)}` : "—"} />
-      </dl>
-    </div>
+    <label className="slider">
+      <span>
+        {field.label} <b>{typeof value === "number" ? trim(value) : value} {field.unit}</b>
+      </span>
+      <input
+        type="range"
+        min={field.min}
+        max={field.max}
+        step={field.step}
+        value={value}
+        onChange={(event) => onChange(normalizeConfig({ ...config, [field.key]: Number(event.target.value) }))}
+      />
+    </label>
   );
 }
 
-function TrackingPanel({ snapshot }: { snapshot: QFSnapshot | null }) {
-  const t = snapshot?.tracking;
-  return (
-    <div className="debug-block">
-      <h3>Tracking confidence</h3>
-      <table className="debug-table">
-        <thead>
-          <tr>
-            <th>Group</th>
-            <th>Conf.</th>
-            <th>Min</th>
-            <th>In frame</th>
-            <th>Weak for</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(t?.groups ?? []).map((g) => (
-            <tr key={g.id}>
-              <td>
-                {g.label}
-                {g.critical ? " (critical)" : ""}
-              </td>
-              <td>{g.confidence.toFixed(2)}</td>
-              <td>{g.threshold.toFixed(2)}</td>
-              <td>{g.inFrame ? "yes" : "no"}</td>
-              <td>{g.badMs > 0 ? `${Math.round(g.badMs)} ms` : "—"}</td>
-              <td className={`st-${g.ok ? "pass" : "fail"}`}>{g.ok ? "PASS" : "FAIL"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <dl className="readout">
-        <Row label="Tracking score" value={t ? t.score.toFixed(2) : "—"} />
-        <Row label="Landmark spikes rejected (total)" value={String(snapshot?.filterStats.rejectedLandmarks ?? 0)} />
-        <Row label="Landmark re-acquires" value={String(snapshot?.filterStats.reacquired ?? 0)} />
-        <Row label="Angle outliers rejected" value={String(snapshot?.filterStats.angleOutliers ?? 0)} />
-      </dl>
-    </div>
-  );
-}
-
-function CameraPanel({ snapshot }: { snapshot: QFSnapshot | null }) {
-  const m = snapshot?.metrics;
-  const cam = snapshot?.baseline?.camera;
-  return (
-    <div className="debug-block">
-      <h3>Camera / body</h3>
-      <table className="debug-table">
-        <thead>
-          <tr>
-            <th>Metric</th>
-            <th>Live</th>
-            <th>Baseline</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Hip line tilt (roll proxy)</td>
-            <td>{deg(m?.hipLineTiltDeg)}</td>
-            <td>{deg(cam?.rollProxyDeg)}</td>
-          </tr>
-          <tr>
-            <td>Torso from vertical</td>
-            <td>{deg(m?.torsoFromVerticalDeg)}</td>
-            <td>{deg(cam?.torsoFromVerticalDeg)}</td>
-          </tr>
-          <tr>
-            <td>Facing yaw (world hips)</td>
-            <td>{deg(m?.facingYawDeg)}</td>
-            <td>{deg(cam?.facingYawDeg)}</td>
-          </tr>
-          <tr>
-            <td>Thigh/shank image ratio (height proxy)</td>
-            <td>{num(m?.pitchProxy)}</td>
-            <td>{num(cam?.pitchProxy)}</td>
-          </tr>
-          <tr>
-            <td>Shank / frame height (distance proxy)</td>
-            <td>{num(m?.shankFrac)}</td>
-            <td>{num(cam?.distanceProxy)}</td>
-          </tr>
-          <tr>
-            <td>Body position x / y</td>
-            <td>{m?.bodyX != null ? `${m.bodyX.toFixed(2)} / ${m.bodyY?.toFixed(2)}` : "—"}</td>
-            <td>{cam ? `${cam.bodyX.toFixed(2)} / ${cam.bodyY.toFixed(2)}` : "—"}</td>
-          </tr>
-          <tr>
-            <td>Shank hang from image vertical</td>
-            <td>{deg(m?.absoluteShankDeg)}</td>
-            <td>{deg(cam?.hangAbsoluteDeg)}</td>
-          </tr>
-          <tr>
-            <td>Camera elevation vs femur (world)</td>
-            <td>—</td>
-            <td>{deg(cam?.femurElevationDeg)}</td>
-          </tr>
-          <tr>
-            <td>Camera azimuth vs femur (world)</td>
-            <td>—</td>
-            <td>{deg(cam?.femurAzimuthDeg)}</td>
-          </tr>
-          <tr>
-            <td>World knee flexion</td>
-            <td>{deg(m?.worldKneeFlexionDeg)}</td>
-            <td>
-              {deg(snapshot?.baseline?.worldKneeFlexionDeg)}
-              {snapshot?.baseline ? (snapshot.baseline.worldFlexionTrusted ? " (trusted)" : " (untrusted)") : ""}
-            </td>
-          </tr>
-          <tr>
-            <td>Swing plane available</td>
-            <td>—</td>
-            <td>{snapshot?.baseline ? (snapshot.baseline.angleRef.plane ? "yes" : "no (femur side-on)") : "—"}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ChecksTable({
-  title,
-  checks,
-  mode,
-  config,
-  onChange,
-}: {
-  title: string;
-  checks: ConstraintCheck[];
-  mode: "setup" | "measure";
-  config: QFConfig;
-  onChange: (config: QFConfig) => void;
-}) {
-  const toggleHard = (id: string, hard: boolean) => {
-    const set = new Set(config.hardConstraints);
-    if (hard) set.add(id);
-    else set.delete(id);
-    onChange({ ...config, hardConstraints: [...set] });
-  };
-  return (
-    <div className="debug-block">
-      <h3>{title}</h3>
-      {checks.length === 0 ? (
-        <p className="muted small">{mode === "measure" ? "Available after calibration." : "Waiting for a person."}</p>
-      ) : (
-        <table className="debug-table">
-          <thead>
-            <tr>
-              <th>Check</th>
-              <th>Current</th>
-              <th>Warn</th>
-              <th>Fail</th>
-              <th>Status</th>
-              <th>{mode === "setup" ? "Blocks" : "Hard"}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {checks.map((check) => (
-              <tr key={check.id} title={check.message}>
-                <td>{check.label}</td>
-                <td>{fmtCheck(check.value, check.unit)}</td>
-                <td>{fmtLimit(check.warn, check.direction, check.unit)}</td>
-                <td>{fmtLimit(check.fail, check.direction, check.unit)}</td>
-                <td className={`st-${check.status}`}>{check.status.toUpperCase()}</td>
-                <td>
-                  {mode === "setup" ? (
-                    check.blocking ? "yes" : "advisory"
-                  ) : check.category === "info" ? (
-                    "info"
-                  ) : (
-                    <input type="checkbox" checked={check.category === "hard"} onChange={(event) => toggleHard(check.id, event.target.checked)} />
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
+function Item({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <dt>{label}</dt>
@@ -463,62 +193,20 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PelvisTranslationPanel({ snapshot }: { snapshot: QFSnapshot | null }) {
-  const metrics = snapshot?.metrics;
-  const check = snapshot?.checks.find((item) => item.id === "pelvis-translation");
-  const baseline = snapshot?.baseline;
-  const center = metrics?.pelvisCenter;
-  return (
-    <div className="debug-block">
-      <h3>Pelvis translation</h3>
-      <dl className="readout">
-        <Row label="Raw displacement" value={metrics?.pelvisShiftPx == null ? "—" : `${metrics.pelvisShiftPx.toFixed(1)} px`} />
-        <Row label="Raw ratio" value={pct(metrics?.pelvisTranslationRaw)} />
-        <Row label="Normalized" value={pct(metrics?.pelvisTranslation)} />
-        <Row label="Baseline pelvis X/Y" value={baseline ? `${baseline.midHip.x.toFixed(0)}, ${baseline.midHip.y.toFixed(0)}` : "—"} />
-        <Row label="Current pelvis X/Y" value={center ? `${center.x.toFixed(0)}, ${center.y.toFixed(0)}` : "—"} />
-        <Row label="Reference body scale" value={baseline ? `${baseline.hipWidthPx.toFixed(0)} px hip width` : "—"} />
-        <Row label="Warning threshold" value={pct(check?.warn)} />
-        <Row label="Fail threshold" value={pct(check?.fail)} />
-        <Row label="Current status" value={check ? check.status.toUpperCase() : "—"} />
-      </dl>
-    </div>
-  );
-}
-
-function formatField(field: { unit: string }, value: number): string {
-  if (field.unit === "% of hip width") return `${(value * 100).toFixed(0)}% of hip width`;
-  return `${value} ${field.unit}`.trim();
-}
-
-function pct(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return `${(value * 100).toFixed(1)}%`;
-}
-
-function fmtCheck(value: number | null, unit: string): string {
-  if (value == null || !Number.isFinite(value)) return "N/A";
-  if (unit === "% hip") return `${(value * 100).toFixed(1)}%`;
-  const digits = unit === "deg" ? 1 : 3;
-  return `${value.toFixed(digits)}${unit === "deg" ? "°" : unit ? ` ${unit}` : ""}`;
-}
-
-function fmtLimit(value: number | null, direction: "max" | "min", unit: string): string {
-  if (value == null) return "—";
-  const shown = unit === "% hip" ? `${(value * 100).toFixed(0)}%` : Number(value.toFixed(3)).toString();
-  return `${direction === "max" ? ">" : "<"} ${shown}`;
+function VecItem({ label, point }: { label: string; point: { x: number; y: number; z: number; visibility?: number } | null | undefined }) {
+  const value = point ? `${point.x.toFixed(3)}, ${point.y.toFixed(3)}, ${point.z.toFixed(3)}` : "—";
+  return <Item label={label} value={value} />;
 }
 
 function deg(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return `${value.toFixed(1)}°`;
+  return value == null ? "—" : `${value.toFixed(2)}°`;
 }
-
+function pct(value: number | null | undefined): string {
+  return value == null ? "—" : `${value.toFixed(2)}%`;
+}
 function num(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return value.toFixed(3);
+  return value == null ? "—" : value.toFixed(2);
 }
-
-function stamp(): string {
-  return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+function trim(value: number): string {
+  return Number(value.toFixed(3)).toString();
 }

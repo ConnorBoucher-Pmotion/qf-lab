@@ -1,14 +1,12 @@
-import type { ConstraintCheck, QFSnapshot } from "../qf/qfTypes";
+import type { ConstraintCheck, TLSnapshot } from "../tl/tlTypes";
 
-const EMPTY: ConstraintCheck[] = [];
-
-export function PositioningGuide({ snapshot }: { snapshot: QFSnapshot | null }) {
+export function PositioningGuide({ snapshot }: { snapshot: TLSnapshot | null }) {
   const state = snapshot?.state ?? "SEARCHING";
-  const setup = state === "SEARCHING" || state === "POSITIONING" || state === "CALIBRATING";
-  const checks = setup ? (snapshot?.setupChecks ?? EMPTY) : (snapshot?.checks.filter((c) => c.category === "hard" || c.category === "soft") ?? EMPTY);
+  const setup = state === "SEARCHING" || state === "POSITIONING" || state === "STABLE" || state === "CALIBRATING";
+  const checks = setup ? (snapshot?.setupChecks ?? []) : (snapshot?.checks ?? []);
   return (
     <section className="gate-box">
-      <p className="kicker">{setup ? "Start gates" : "Movement gates"}</p>
+      <p className="kicker">{setup ? "Position" : "Compensation"}</p>
       <ul className="checklist">
         {checks.length === 0 ? (
           <li className="st-na">
@@ -17,11 +15,11 @@ export function PositioningGuide({ snapshot }: { snapshot: QFSnapshot | null }) 
           </li>
         ) : (
           checks.map((check) => (
-            <li key={check.id} className={`st-${check.status}`}>
-              <span className="mark">{mark(check.status)}</span>
+            <li key={check.id} className={`st-${check.status === "na" ? "na" : check.status}`}>
+              <span className="mark">{mark(check)}</span>
               <span>
                 {check.label}
-                {check.status === "fail" || check.status === "warn" ? <small>{check.message}</small> : null}
+                <small>{check.message}</small>
               </span>
             </li>
           ))
@@ -31,15 +29,16 @@ export function PositioningGuide({ snapshot }: { snapshot: QFSnapshot | null }) 
   );
 }
 
-function mark(status: ConstraintCheck["status"]): string {
-  if (status === "pass") return "PASS";
-  if (status === "warn") return "WARN";
-  if (status === "na") return "N/A";
+function mark(check: ConstraintCheck): string {
+  if (check.category === "info") return "INFO";
+  if (check.status === "pass") return "PASS";
+  if (check.status === "warn") return "WARN";
+  if (check.status === "na") return "N/A";
   return "FAIL";
 }
 
-export function instructionTone(state: QFSnapshot["state"] | undefined): string {
-  if (state === "INVALID" || state === "SEARCHING" || state == null) return "bad";
-  if (state === "POSITIONING" || state === "CALIBRATING" || state === "TRACKING_WARNING" || state === "VALIDATING") return "warn";
+export function instructionTone(state: TLSnapshot["state"] | undefined): string {
+  if (state === "INVALID" || state === "SEARCHING" || state === "TRACKING_LOST" || state == null) return "bad";
+  if (state === "POSITIONING" || state === "STABLE" || state === "CALIBRATING" || state === "PEAK") return "warn";
   return "ok";
 }

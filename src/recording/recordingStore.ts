@@ -5,7 +5,7 @@ export type StoredRecording = {
   bytes: number;
 };
 
-const DB_NAME = "qf-lab";
+const DB_NAME = "tl-lab";
 const STORE = "recordings";
 
 const memory = new Map<string, StoredRecording>();
@@ -116,7 +116,7 @@ export function recordingFilename(trial: { side: string; trialNumber: number; ti
   const stamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
   const side = trial.side === "left" ? "Left" : "Right";
   const ext = mimeType.includes("mp4") ? "mp4" : "webm";
-  return `QF_${side}_Trial_${pad(trial.trialNumber)}_${stamp}.${ext}`;
+  return `TL_${side}_Trial_${pad(trial.trialNumber)}_${stamp}.${ext}`;
 }
 
 export function videoAction(id: string, videoIds: ReadonlySet<string>, savingId: string | null): { label: string; enabled: boolean } {

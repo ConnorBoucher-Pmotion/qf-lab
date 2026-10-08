@@ -1,25 +1,26 @@
 import { useEffect, useRef, useState } from "react";
-import type { QFConfig } from "../qf/qfConfig";
-import { QFSession } from "../qf/qfStateMachine";
-import type { QFSnapshot } from "../qf/qfTypes";
-import type { Side } from "../pose/types";
-import { createQfPoseLandmarker, imageLandmarks, worldLandmarks, type PoseLandmarkerHandle } from "../pose/mediaPipePose";
+import type { TLConfig } from "../tl/tlConfig";
+import { TLSession } from "../tl/tlStateMachine";
+import type { RotationDirection, TLSnapshot } from "../tl/tlTypes";
+import { syntheticSeated } from "../tl/tlRotation";
+import { LM } from "../pose/types";
+import { createTlPoseLandmarker, imageLandmarks, worldLandmarks, type PoseLandmarkerHandle } from "../pose/mediaPipePose";
 import { TrialRecorder, type RecorderStatus, type SavedRecording } from "../recording/trialRecorder";
-import { drawQfOverlay } from "./QFOverlay";
+import { drawTlOverlay } from "./TLOverlay";
 
 type Props = {
-  side: Side;
-  config: QFConfig;
+  direction: RotationDirection;
+  config: TLConfig;
   resetSignal: number;
   nextSignal: number;
   preRollMs: number;
   postRollMs: number;
-  onSnapshot: (snapshot: QFSnapshot) => void;
+  onSnapshot: (snapshot: TLSnapshot) => void;
   onRecording: (recording: SavedRecording) => void;
   onRecorderStatus: (status: RecorderStatus) => void;
 };
 
-export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, postRollMs, onSnapshot, onRecording, onRecorderStatus }: Props) {
+export function CameraView({ direction, config, resetSignal, nextSignal, preRollMs, postRollMs, onSnapshot, onRecording, onRecorderStatus }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onSnapshotRef = useRef(onSnapshot);
   const onRecordingRef = useRef(onRecording);
@@ -27,31 +28,28 @@ export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, p
   const preRollRef = useRef(preRollMs);
   const postRollRef = useRef(postRollMs);
   const configRef = useRef(config);
-  const sideRef = useRef(side);
-  const sessionRef = useRef<QFSession | null>(null);
+  const directionRef = useRef(direction);
+  const sessionRef = useRef<TLSession | null>(null);
   onSnapshotRef.current = onSnapshot;
   onRecordingRef.current = onRecording;
   onStatusRef.current = onRecorderStatus;
   preRollRef.current = preRollMs;
   postRollRef.current = postRollMs;
   configRef.current = config;
-  sideRef.current = side;
+  directionRef.current = direction;
   const [status, setStatus] = useState("Starting camera…");
   const [recPhase, setRecPhase] = useState<RecorderStatus["phase"]>("off");
 
   useEffect(() => {
     sessionRef.current?.setConfig(config);
   }, [config]);
-
   useEffect(() => {
-    sessionRef.current?.setSide(side);
-  }, [side]);
-
+    sessionRef.current?.setDirection(direction);
+  }, [direction]);
   useEffect(() => {
     if (resetSignal === 0) return;
     sessionRef.current?.reset();
   }, [resetSignal]);
-
   useEffect(() => {
     if (nextSignal === 0) return;
     sessionRef.current?.nextTrial();
@@ -60,9 +58,9 @@ export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, p
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const session = new QFSession(configRef.current, sideRef.current);
+    const session = new TLSession(configRef.current, directionRef.current);
     sessionRef.current = session;
-
+    const synthetic = new URLSearchParams(window.location.search).get("synthetic") === "1";
     let cancelled = false;
     let raf = 0;
     let lastDetectTs = -1;
@@ -70,16 +68,20 @@ export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, p
     let lastState = "";
     let stream: MediaStream | null = null;
     let landmarker: PoseLandmarkerHandle | null = null;
+    const started = performance.now();
 
     const video = document.createElement("video");
     video.className = "camera-feed";
     video.muted = true;
     video.autoplay = true;
     video.playsInline = true;
-    video.setAttribute("playsinline", "true");
     const canvas = document.createElement("canvas");
     host.replaceChildren(video, canvas);
     const ctx = canvas.getContext("2d");
+    const source = document.createElement("canvas");
+    source.width = 1280;
+    source.height = 720;
+    const sourceCtx = source.getContext("2d");
     const recorder = new TrialRecorder(canvas, {
       onSaved: (recording) => onRecordingRef.current(recording),
       onStatus: (next) => {
@@ -90,13 +92,40 @@ export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, p
       postRollMs: () => postRollRef.current,
     });
 
+    const publish = (snapshot: TLSnapshot, now: number) => {
+      if (snapshot.state !== lastState || now - lastUi > 80) {
+        lastState = snapshot.state;
+        lastUi = now;
+        onSnapshotRef.current(snapshot);
+      }
+    };
+
     const loop = () => {
       if (cancelled) return;
       raf = requestAnimationFrame(loop);
-      if (video.readyState < 2 || !ctx || !landmarker) return;
+      if (!ctx) return;
       const now = Math.round(performance.now());
       if (now <= lastDetectTs) return;
       lastDetectTs = now;
+      if (synthetic) {
+        const pose = syntheticSeated({ shoulderYawDeg: scriptedYaw(now - started), width: 1280, height: 720 });
+        drawBody(sourceCtx, pose.image);
+        if (canvas.width !== 1280 || canvas.height !== 720) {
+          canvas.width = 1280;
+          canvas.height = 720;
+        }
+        session.setConfig(configRef.current);
+        const snapshot = session.push({ width: 1280, height: 720, image: pose.image, world: pose.world }, now);
+        drawTlOverlay(ctx, 1280, 720, snapshot, configRef.current);
+        publish(snapshot, now);
+        try {
+          recorder.capture(video, snapshot, now);
+        } catch {
+          // Recording must never stop the measurement loop.
+        }
+        return;
+      }
+      if (video.readyState < 2 || !landmarker) return;
       const width = video.videoWidth;
       const height = video.videoHeight;
       if (width < 2 || height < 2) return;
@@ -104,22 +133,14 @@ export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, p
         canvas.width = width;
         canvas.height = height;
       }
-      ctx.clearRect(0, 0, width, height);
       try {
         const detection = landmarker.detectForVideo(video, now);
         const image = imageLandmarks(detection.landmarks?.[0], width, height);
         const world = worldLandmarks(detection.worldLandmarks?.[0], detection.landmarks?.[0]);
         session.setConfig(configRef.current);
-        const snapshot = session.push(
-          { width, height, image: image ?? [], world: world ?? [] },
-          now
-        );
-        drawQfOverlay(ctx, width, height, snapshot, configRef.current);
-        if (snapshot.state !== lastState || now - lastUi > 80) {
-          lastState = snapshot.state;
-          lastUi = now;
-          onSnapshotRef.current(snapshot);
-        }
+        const snapshot = session.push({ width, height, image: image ?? [], world: world ?? [] }, now);
+        drawTlOverlay(ctx, width, height, snapshot, configRef.current);
+        publish(snapshot, now);
         try {
           recorder.capture(video, snapshot, now);
         } catch {
@@ -132,6 +153,18 @@ export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, p
 
     void (async () => {
       try {
+        if (synthetic) {
+          drawBody(sourceCtx, syntheticSeated({ width: 1280, height: 720 }).image);
+          stream = source.captureStream(30);
+          video.srcObject = stream;
+          const playing = video.play();
+          if (!cancelled) {
+            setStatus("Synthetic rotation check");
+            raf = requestAnimationFrame(loop);
+          }
+          await playing;
+          return;
+        }
         if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser cannot open a camera");
         setStatus("Allow camera access…");
         stream = await navigator.mediaDevices.getUserMedia({
@@ -147,7 +180,7 @@ export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, p
         if (cancelled) return;
         setStatus("Loading pose model…");
         try {
-          landmarker = await createQfPoseLandmarker();
+          landmarker = await createTlPoseLandmarker();
           if (!cancelled) setStatus("");
         } catch (error) {
           const message = error instanceof Error ? error.message.split("\n")[0] : "Pose model failed";
@@ -155,8 +188,7 @@ export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, p
         }
         if (!cancelled) raf = requestAnimationFrame(loop);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Camera failed";
-        setStatus(message);
+        setStatus(error instanceof Error ? error.message : "Camera failed");
       }
     })();
 
@@ -180,4 +212,24 @@ export function CameraView({ side, config, resetSignal, nextSignal, preRollMs, p
       <p className={`rec-badge rec-unavailable${recPhase === "unavailable" ? " on" : ""}`}>Video recording unavailable in this browser.</p>
     </div>
   );
+}
+
+function scriptedYaw(elapsed: number): number {
+  if (elapsed < 3200) return 0;
+  if (elapsed < 6200) return ((elapsed - 3200) / 3000) * 40;
+  return 40;
+}
+
+function drawBody(ctx: CanvasRenderingContext2D | null, image: { x: number; y: number; visibility: number }[]): void {
+  if (!ctx) return;
+  ctx.fillStyle = "#1b2430";
+  ctx.fillRect(0, 0, 1280, 720);
+  ctx.fillStyle = "#d7e6f5";
+  for (const index of [LM.leftShoulder, LM.rightShoulder, LM.leftHip, LM.rightHip, LM.leftKnee, LM.rightKnee, LM.nose]) {
+    const point = image[index];
+    if (!point || point.visibility < 0.2) continue;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 14, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }

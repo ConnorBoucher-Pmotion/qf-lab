@@ -1,4 +1,4 @@
-import type { QFSnapshot, QFStateName } from "../qf/qfTypes";
+import type { TLSnapshot, TLStateName } from "../tl/tlTypes";
 import { recordingIntent, type RecMode } from "./recordingIntent";
 
 export type RecorderPhase = "off" | "preroll" | "keep" | "post" | "unavailable";
@@ -90,7 +90,7 @@ export class TrialRecorder {
     this.emit(true);
   }
 
-  capture(video: HTMLVideoElement, snapshot: QFSnapshot, now: number): void {
+  capture(video: HTMLVideoElement, snapshot: TLSnapshot, now: number): void {
     this.notePose(now);
     if (!this.supported || this.closed || this.busy) return;
     const elapsed = this.startedAt ? now - this.startedAt : 0;
@@ -113,7 +113,7 @@ export class TrialRecorder {
     if (!live) this.stream?.getTracks().forEach((track) => track.stop());
   }
 
-  private apply(intent: ReturnType<typeof recordingIntent>, snapshot: QFSnapshot): void {
+  private apply(intent: ReturnType<typeof recordingIntent>, snapshot: TLSnapshot): void {
     if (intent === "idle") return;
     if (intent === "start-preroll") this.start(false);
     else if (intent === "start-keep") this.start(true);
@@ -185,7 +185,7 @@ export class TrialRecorder {
     this.recorder.stop();
   }
 
-  private armPost(snapshot: QFSnapshot): void {
+  private armPost(snapshot: TLSnapshot): void {
     const id = snapshot.result?.id;
     if (!id) return;
     this.trialId = id;
@@ -253,7 +253,7 @@ export class TrialRecorder {
     this.requestFrame = () => undefined;
   }
 
-  private draw(video: HTMLVideoElement, snapshot: QFSnapshot): void {
+  private draw(video: HTMLVideoElement, snapshot: TLSnapshot): void {
     const ctx = this.ctx;
     if (!ctx || video.videoWidth < 2 || video.videoHeight < 2) return;
     const scale = Math.min(1, MAX_W / video.videoWidth, MAX_H / video.videoHeight);
@@ -307,57 +307,58 @@ export class TrialRecorder {
   }
 }
 
-function drawHud(ctx: CanvasRenderingContext2D, snapshot: QFSnapshot): void {
-  const angle = displayedAngle(snapshot);
-  const tracking = trackingWord(snapshot);
-  const line1 = `QF  ${angle == null ? "—.—" : `${angle.toFixed(1)}°`}`;
-  const line2 = `${labelState(snapshot.state)}    Tracking ${tracking}`;
+function drawHud(ctx: CanvasRenderingContext2D, snapshot: TLSnapshot): void {
+  const current = snapshot.rom.current;
+  const valid = snapshot.state === "COMPLETE" ? snapshot.result?.measuredRom : snapshot.rom.validPeak;
+  const raw = snapshot.rom.rawPeak;
+  const dir = snapshot.direction === "left" ? "LEFT" : "RIGHT";
+  const line1 = `TL ${dir}  ${current == null ? "—.—" : `${current.toFixed(1)}°`}`;
+  const line2 = `Valid ${fmt(valid)}   Raw ${fmt(raw)}   ${labelState(snapshot.state)}`;
+  const line3 = `Tracking ${trackingWord(snapshot)}`;
   ctx.save();
-  ctx.font = "600 26px system-ui, sans-serif";
+  ctx.font = "600 24px system-ui, sans-serif";
   const width1 = ctx.measureText(line1).width;
   ctx.font = "600 16px system-ui, sans-serif";
   const width2 = ctx.measureText(line2).width;
-  const boxW = Math.ceil(Math.max(width1, width2) + 46);
+  const width3 = ctx.measureText(line3).width;
+  const boxW = Math.ceil(Math.max(width1, width2, width3) + 46);
   ctx.fillStyle = "rgba(0,0,0,0.55)";
-  roundRect(ctx, 16, 16, boxW, 74, 10);
+  roundRect(ctx, 16, 16, boxW, 96, 10);
   ctx.fill();
   ctx.beginPath();
   ctx.fillStyle = toneColor(snapshot);
   ctx.arc(34, 40, 6, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#ffffff";
-  ctx.font = "600 26px system-ui, sans-serif";
+  ctx.font = "600 24px system-ui, sans-serif";
   ctx.textBaseline = "middle";
   ctx.fillText(line1, 48, 40);
   ctx.font = "600 16px system-ui, sans-serif";
   ctx.fillStyle = "rgba(255,255,255,0.92)";
   ctx.fillText(line2, 48, 68);
+  ctx.fillText(line3, 48, 90);
   ctx.restore();
 }
 
-function displayedAngle(snapshot: QFSnapshot): number | null {
-  if (snapshot.state === "RESULT") return snapshot.result?.measuredRom ?? snapshot.primary.filtered;
-  return snapshot.primary.filtered ?? snapshot.primary.stable;
+function fmt(value: number | null | undefined): string {
+  return value == null ? "—.—" : `${value.toFixed(1)}°`;
 }
 
-function labelState(state: QFStateName): string {
-  if (state === "TRACKING_WARNING") return "TRACKING";
-  if (state === "VALIDATING") return "VALIDATING";
+function labelState(state: TLStateName): string {
+  if (state === "TRACKING_LOST") return "TRACKING LOST";
   return state;
 }
 
-function trackingWord(snapshot: QFSnapshot): string {
+function trackingWord(snapshot: TLSnapshot): string {
   if (!snapshot.tracking.present || snapshot.tracking.score <= 0) return "LOST";
   if (!snapshot.tracking.criticalOk) return "WEAK";
   if (snapshot.tracking.score >= 0.7) return "GOOD";
   return "OK";
 }
 
-function toneColor(snapshot: QFSnapshot): string {
-  if (snapshot.state === "INVALID" || snapshot.hardFailed) return "#ff5d5d";
-  if (snapshot.state === "TRACKING_WARNING" || snapshot.state === "CALIBRATING" || snapshot.checks.some((check) => check.status === "warn" || (check.category === "soft" && check.status === "fail"))) {
-    return "#e6b325";
-  }
+function toneColor(snapshot: TLSnapshot): string {
+  if (snapshot.state === "INVALID" || snapshot.state === "TRACKING_LOST" || snapshot.hardFailed) return "#ff5d5d";
+  if (snapshot.state === "CALIBRATING" || snapshot.state === "PEAK" || snapshot.checks.some((check) => check.status === "warn")) return "#e6b325";
   return "#3ddc84";
 }
 

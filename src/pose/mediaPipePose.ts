@@ -13,7 +13,7 @@ function bundledModelUrl(): string {
  * Isolated from the PMotion app, which stores its loader on window.__mpVision.
  * Sharing that global would let the two pages fight over the WASM module.
  */
-const GLOBAL_KEY = "__qfVision";
+const GLOBAL_KEY = "__tlVision";
 
 type PoseDetection = {
   landmarks?: RawLandmark[][];
@@ -48,11 +48,11 @@ function loadVision(): Promise<VisionModule> {
       }
       resolve(vision);
     };
-    window.addEventListener("qf-vision-ready", finish, { once: true });
+    window.addEventListener("tl-vision-ready", finish, { once: true });
     const script = document.createElement("script");
     script.type = "module";
     script.textContent =
-      `import * as vision from "${CDN}/vision_bundle.mjs"; window.${GLOBAL_KEY} = vision; window.dispatchEvent(new Event("qf-vision-ready"));`;
+      `import * as vision from "${CDN}/vision_bundle.mjs"; window.${GLOBAL_KEY} = vision; window.dispatchEvent(new Event("tl-vision-ready"));`;
     script.onerror = () => {
       window.clearTimeout(timeout);
       reject(new Error("Pose tracker script failed"));
@@ -61,7 +61,7 @@ function loadVision(): Promise<VisionModule> {
   });
 }
 
-export async function createQfPoseLandmarker(): Promise<PoseLandmarkerHandle> {
+export async function createTlPoseLandmarker(): Promise<PoseLandmarkerHandle> {
   const vision = await loadVision();
   const fileset = await vision.FilesetResolver.forVisionTasks(WASM_URL);
   const options = {
@@ -88,7 +88,7 @@ export function imageLandmarks(raw: RawLandmark[] | undefined, width: number, he
   return raw.slice(0, 33).map((lm) => ({
     x: lm.x * width,
     y: lm.y * height,
-    z: 0,
+    z: (lm.z ?? 0) * width,
     visibility: confidenceOf(lm),
   }));
 }

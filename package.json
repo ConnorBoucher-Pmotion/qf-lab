@@ -1,13 +1,12 @@
 {
-  "name": "qf-lab",
+  "name": "tl-lab",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 5190 --strictPort",
-    "check": "tsx scripts/check-qf-math.ts",
-    "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit && vite build"
+    "dev": "vite --port 5191 --strictPort",
+    "check": "tsx scripts/check-tl-math.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "react": "^19.0.0",

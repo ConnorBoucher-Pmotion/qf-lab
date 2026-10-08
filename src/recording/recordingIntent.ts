@@ -1,4 +1,4 @@
-import type { QFStateName } from "../qf/qfTypes";
+import type { TLStateName } from "../tl/tlTypes";
 
 export type RecMode = "off" | "preroll" | "keep" | "post";
 
@@ -13,16 +13,12 @@ export type RecIntent =
   | "discard"
   | "discard-then-preroll";
 
-const PREROLL: ReadonlySet<QFStateName> = new Set(["CALIBRATING", "READY", "ARMED"]);
-const KEEP: ReadonlySet<QFStateName> = new Set(["MEASURING", "HOLDING", "VALIDATING", "TRACKING_WARNING"]);
+const PREROLL: ReadonlySet<TLStateName> = new Set(["STABLE", "CALIBRATING", "READY"]);
+const KEEP: ReadonlySet<TLStateName> = new Set(["ROTATING", "PEAK", "HOLD", "TRACKING_LOST"]);
 
-/**
- * What the recorder should do for this assessment state.
- * Pre-roll covers the still start. The kept file begins once the foot starts moving.
- * Returning to READY without a result throws that clip away.
- */
-export function recordingIntent(mode: RecMode, state: QFStateName, elapsedMs: number, preRollMs: number): RecIntent {
-  if (mode === "post") return state === "RESULT" || state === "INVALID" ? "idle" : "finish-now";
+/** Pre-roll covers neutral calibration. The kept file continues once rotation starts. */
+export function recordingIntent(mode: RecMode, state: TLStateName, elapsedMs: number, preRollMs: number): RecIntent {
+  if (mode === "post") return state === "COMPLETE" || state === "INVALID" ? "idle" : "finish-now";
 
   if (KEEP.has(state)) {
     if (mode === "keep") return "idle";
@@ -30,7 +26,7 @@ export function recordingIntent(mode: RecMode, state: QFStateName, elapsedMs: nu
     return "start-keep";
   }
 
-  if (state === "RESULT" || state === "INVALID") {
+  if (state === "COMPLETE" || state === "INVALID") {
     if (mode === "keep" || mode === "preroll") return "arm-post";
     return "idle";
   }

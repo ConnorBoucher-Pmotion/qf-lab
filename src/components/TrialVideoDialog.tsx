@@ -1,28 +1,29 @@
 import { useEffect, useRef, useState } from "react";
-import type { Trial } from "../qf/qfTypes";
+import type { TLTrial } from "../tl/tlTypes";
 import { deleteRecording, downloadBlob, getRecording, recordingFilename, type StoredRecording } from "../recording/recordingStore";
 
 type Props = {
-  trial: Trial | null;
+  trial: TLTrial | null;
+  preRollMs: number;
   onClose: () => void;
   onDeleted: (id: string) => void;
 };
 
-export function TrialVideoDialog({ trial, onClose, onDeleted }: Props) {
+export function TrialVideoDialog({ trial, preRollMs, onClose, onDeleted }: Props) {
   const [clip, setClip] = useState<StoredRecording | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  const trialId = trial?.id ?? null;
 
   useEffect(() => {
-    if (!trialId) return;
+    if (!trial) return;
     let objectUrl: string | null = null;
     let cancelled = false;
     setClip(null);
     setMissing(false);
-    void getRecording(trialId).then((recording) => {
+    void getRecording(trial.id).then((recording) => {
       if (cancelled) return;
       if (!recording) {
         setMissing(true);
@@ -42,81 +43,70 @@ export function TrialVideoDialog({ trial, onClose, onDeleted }: Props) {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       setUrl(null);
     };
-  }, [trialId]);
+  }, [trial]);
 
   if (!trial) return null;
-  const status = trial.accepted ? "Valid" : "Invalid";
-  const reason = trial.accepted ? trial.instruction : trial.instruction || trial.failedConstraints.join(", ") || "Rejected";
+  const seek = (offsetMs: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = Math.max(0, (preRollMs + offsetMs) / 1000);
+    void video.play();
+  };
 
   return (
     <div className="video-dialog" role="dialog" aria-modal="true" aria-label={`Trial ${trial.trialNumber} video`}>
       <div className="video-card">
         <div className="video-head">
           <h2>
-            Trial {trial.trialNumber} · {trial.side} · {status}
+            Trial {trial.trialNumber} · {trial.direction} rotation · {trial.accepted ? "Valid" : "Invalid"}
           </h2>
           <button type="button" onClick={onClose}>
             Close
           </button>
         </div>
         <p className="video-summary">
-          {trial.accepted && trial.measuredRom != null ? `QF ROM ${trial.measuredRom.toFixed(1)}°` : "No accepted angle"}
+          Valid {trial.measuredRom == null ? "—" : `${trial.measuredRom.toFixed(1)}°`} · Raw {trial.rawMaximum == null ? "—" : `${trial.rawMaximum.toFixed(1)}°`}
           {trial.goniometer != null ? ` · Goniometer ${trial.goniometer.toFixed(1)}°` : ""}
-          {trial.signedError != null ? ` · Difference ${trial.signedError > 0 ? "+" : ""}${trial.signedError.toFixed(1)}°` : ""}
           {clip ? ` · ${(clip.durationMs / 1000).toFixed(1)} s` : ""}
         </p>
-        <p className="muted small">{reason}</p>
-        {url ? (
-          <video key={url} src={url} controls autoPlay playsInline />
-        ) : (
-          <p className="video-waiting">{missing ? "No video was stored for this trial." : "Loading video…"}</p>
-        )}
+        <p className="muted small">{trial.instruction} The replay includes the camera and the measurement overlay.</p>
+        {url ? <video ref={videoRef} key={url} src={url} controls autoPlay playsInline /> : <p className="video-waiting">{missing ? "No video was stored for this trial." : "Loading video…"}</p>}
+        <h3>Event timeline</h3>
+        <p className="muted small">Times are approximate. The file starts about {Math.round(preRollMs / 100) / 10}s before rotation.</p>
+        <div className="event-list">
+          {trial.events.map((event, index) => (
+            <button key={`${event.label}-${index}`} type="button" onClick={() => seek(event.offsetMs)} disabled={!url}>
+              {formatOffset(event.offsetMs)} {event.label}
+            </button>
+          ))}
+          {trial.events.length === 0 ? <p className="muted">No events were stored.</p> : null}
+        </div>
         <div className="row wrap">
           <button
             type="button"
-            onClick={() => {
-              const video = document.querySelector(".video-card video");
-              if (video instanceof HTMLVideoElement) {
-                video.currentTime = 0;
-                void video.play();
-              }
-            }}
-            disabled={!url}
-          >
-            Restart
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const video = document.querySelector(".video-card video");
-              if (video instanceof HTMLVideoElement) void video.requestFullscreen?.();
-            }}
-            disabled={!url}
-          >
-            Full screen
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!clip) return;
-              downloadBlob(recordingFilename(trial, clip.mimeType), clip.blob);
-            }}
-            disabled={!clip}
+            disabled={!url || !clip}
+            onClick={() => clip && downloadBlob(recordingFilename({ side: trial.direction, trialNumber: trial.trialNumber, timestamp: trial.timestamp }, clip.mimeType), clip.blob)}
           >
             Download
           </button>
           <button
             type="button"
             onClick={() => {
-              if (!confirm(`Delete the video for trial ${trial.trialNumber}? The angle stays.`)) return;
               void deleteRecording(trial.id).then(() => onDeleted(trial.id));
             }}
           >
             Delete video
           </button>
         </div>
-        <p className="muted small">Saved on this computer only. Nothing is uploaded.</p>
       </div>
     </div>
   );
+}
+
+function formatOffset(ms: number): string {
+  const sign = ms < 0 ? "-" : "";
+  const total = Math.abs(ms) / 1000;
+  const minutes = Math.floor(total / 60);
+  const seconds = (total - minutes * 60).toFixed(1).padStart(4, "0");
+  return `${sign}${minutes}:${seconds}`;
 }

@@ -357,6 +357,11 @@ button.primary { background: #d7e6f5; color: #102033; }
 }
 .video-waiting { min-height: 220px; display: flex; align-items: center; justify-content: center; color: #9aabbd; }
 
+.live-rows.tall { grid-template-rows: repeat(5, 1.55rem); }
+.event-list { display: grid; gap: 0.3rem; margin: 0.4rem 0 0.7rem; }
+.event-list button { text-align: left; }
+.protocol { margin: 0.35rem 0; }
+
 @media (max-width: 900px) {
   .assessment { height: auto; overflow: visible; }
   .assessment-grid { grid-template-columns: 1fr; }
