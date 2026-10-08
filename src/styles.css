@@ -66,6 +66,8 @@ h1, h2 { font-size: 1rem; margin: 0; font-weight: 650; white-space: nowrap; }
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .countdown {
