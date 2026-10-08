@@ -75,6 +75,6 @@ function mark(check: ConstraintCheck): string {
 
 export function instructionTone(state: TLSnapshot["state"] | undefined): string {
   if (state === "INVALID" || state === "SEARCHING" || state === "TRACKING_LOST" || state == null) return "bad";
-  if (state === "POSITIONING" || state === "STABLE" || state === "CALIBRATING" || state === "PEAK") return "warn";
+  if (state === "POSITIONING" || state === "STABLE" || state === "CALIBRATING" || state === "COUNTDOWN" || state === "PEAK") return "warn";
   return "ok";
 }

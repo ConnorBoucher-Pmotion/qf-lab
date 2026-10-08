@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AlgorithmCompare } from "./components/AlgorithmCompare";
 import { CameraView } from "./components/CameraView";
 import { DebugPanel } from "./components/DebugPanel";
 import { PositioningGuide, instructionTone } from "./components/PositioningGuide";
@@ -18,6 +19,8 @@ export function App() {
   const [series, setSeriesState] = useState(() => loadSeries());
   const [resetSignal, setResetSignal] = useState(0);
   const [nextSignal, setNextSignal] = useState(0);
+  const [startSignal, setStartSignal] = useState(0);
+  const [acceptSignal, setAcceptSignal] = useState(0);
   const [snapshot, setSnapshot] = useState<TLSnapshot | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
   const [trials, setTrials] = useState<TLTrial[]>(() => loadTrials());
@@ -131,23 +134,44 @@ export function App() {
         </header>
         <div className="assessment-grid">
           <div className="camera-column">
-            <CameraView
-              direction={direction}
-              config={config}
-              resetSignal={resetSignal}
-              nextSignal={nextSignal}
-              preRollMs={preRollMs}
-              postRollMs={postRollMs}
-              onSnapshot={setSnapshot}
-              onRecording={onRecording}
-              onRecorderStatus={setRecorder}
-            />
+            <div className="camera-stage">
+              <CameraView
+                direction={direction}
+                config={config}
+                resetSignal={resetSignal}
+                nextSignal={nextSignal}
+                startSignal={startSignal}
+                acceptSignal={acceptSignal}
+                preRollMs={preRollMs}
+                postRollMs={postRollMs}
+                onSnapshot={setSnapshot}
+                onRecording={onRecording}
+                onRecorderStatus={setRecorder}
+              />
+              {snapshot?.countdownLabel ? <p className="countdown">{snapshot.countdownLabel}</p> : null}
+            </div>
             <div className="instruction-bar">
               <p className={`instruction tone-${instructionTone(snapshot?.state)}`}>{snapshot?.instruction ?? "Sit facing the camera."}</p>
               {snapshot?.blockedBy ? <p className="blocked-by">{snapshot.blockedBy}</p> : null}
+              <div className="start-row">
+                <button type="button" disabled={snapshot?.state !== "READY" || config.romTestMode} onClick={() => setStartSignal((value) => value + 1)}>
+                  Start rotation
+                </button>
+                <button type="button" disabled={!snapshot?.movementStarted || snapshot.result != null} onClick={() => setAcceptSignal((value) => value + 1)}>
+                  Accept current peak
+                </button>
+                <button
+                  type="button"
+                  className={config.romTestMode ? "on" : ""}
+                  onClick={() => setConfig({ ...config, romTestMode: !config.romTestMode })}
+                >
+                  ROM algorithm test mode
+                </button>
+              </div>
             </div>
           </div>
           <aside className="live-rail">
+            <AlgorithmCompare snapshot={snapshot} />
             <QualityIndicator snapshot={snapshot} />
             <PositioningGuide snapshot={snapshot} />
           </aside>
@@ -208,6 +232,6 @@ function nextAttempt(saved: TLTrial[], seriesName: string): number {
 
 function tone(snapshot: TLSnapshot | null): string {
   if (!snapshot || snapshot.state === "SEARCHING" || snapshot.state === "INVALID" || snapshot.state === "TRACKING_LOST") return "red";
-  if (snapshot.state === "POSITIONING" || snapshot.state === "CALIBRATING" || snapshot.state === "PEAK" || snapshot.hardFailed) return "yellow";
+  if (snapshot.state === "POSITIONING" || snapshot.state === "CALIBRATING" || snapshot.state === "COUNTDOWN" || snapshot.state === "PEAK" || snapshot.hardFailed) return "yellow";
   return "green";
 }

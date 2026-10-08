@@ -1,4 +1,4 @@
-import { ALGORITHM_INFO, ROTATION_ALGORITHMS, type RotationAlgorithm } from "./tlRotation";
+import { ALGORITHM_ALIASES, ALGORITHM_INFO, ROTATION_ALGORITHMS, type RotationAlgorithm } from "./tlRotation";
 
 export type AngleFilterKind = "oneEuro" | "ema" | "none";
 
@@ -9,11 +9,20 @@ export type AngleFilterKind = "oneEuro" | "ema" | "none";
 export type TLConfig = {
   algorithm: RotationAlgorithm;
   angleFilter: AngleFilterKind;
+  /** Kept so older saved configs still load. Movement no longer starts from this threshold. */
   minMovementDeg: number;
   minVelocityDegPerSec: number;
   movementConfirmMs: number;
-  /** Consecutive frames that must stay past the start threshold before ROTATING. */
+  /** Kept so older saved configs still load. The start is the Start rotation button. */
   movementConfirmFrames: number;
+  /** 3-2-1 length. Measurement begins after this, plus a short ROTATE cue. 0 skips the countdown. */
+  countdownMs: number;
+  /** Hold cannot finish a trial before the active measurement has lasted this long. */
+  minActiveMs: number;
+  /** Hold cannot finish a trial before the rotation has reached this far from neutral. */
+  minPeakRomDeg: number;
+  /** Free rotation after one calibration. Trials do not finish on their own. */
+  romTestMode: boolean;
   stableMs: number;
   calibrationMs: number;
   minCalibrationFrames: number;
@@ -55,33 +64,39 @@ export type TLConfig = {
   bypassFaceCamera: boolean;
   /** Internal. Stops the one-time 12°/25° → 10°/20° default migration from repeating. */
   facingThresholdVersion: number;
+  /** Internal. Stops the one-time smoothing and hold-default migration from repeating. */
+  filterVersion: number;
   hardFailPersistMs: number;
 };
 
 export const TL_CONFIG: TLConfig = {
-  algorithm: "shoulderVsPelvis",
+  algorithm: "legacy",
   angleFilter: "oneEuro",
   minMovementDeg: 8,
   minVelocityDegPerSec: 10,
   movementConfirmMs: 250,
   movementConfirmFrames: 4,
+  countdownMs: 1500,
+  minActiveMs: 2000,
+  minPeakRomDeg: 20,
+  romTestMode: false,
   stableMs: 600,
   calibrationMs: 1000,
   minCalibrationFrames: 12,
   neutralYawToleranceDeg: 8,
   maxCalibrationYawSdDeg: 1.8,
   maxCalibrationPelvisJitter: 0.08,
-  holdMs: 1750,
-  peakWindowDeg: 3,
+  holdMs: 1500,
+  peakWindowDeg: 2.5,
   peakVelocityDegPerSec: 6,
-  landmarkMinCutoffHz: 1.4,
-  landmarkBeta: 0.8,
+  landmarkMinCutoffHz: 2.2,
+  landmarkBeta: 1.6,
   outlierJumpHipWidths: 0.45,
   reacquireFrames: 3,
-  angleMinCutoffHz: 1.2,
-  angleBeta: 0.04,
+  angleMinCutoffHz: 3,
+  angleBeta: 0.35,
   angleEmaAlpha: 0.35,
-  angleOutlierDeg: 12,
+  angleOutlierDeg: 30,
   landmarkConfidence: 0.4,
   confidenceGraceMs: 150,
   trackingLostMs: 400,
@@ -104,6 +119,7 @@ export const TL_CONFIG: TLConfig = {
   setupFacingFailDeg: 20,
   bypassFaceCamera: false,
   facingThresholdVersion: 2,
+  filterVersion: 2,
   hardFailPersistMs: 300,
 };
 
@@ -130,7 +146,7 @@ export type SelectField = {
 
 export type ToggleField = {
   kind: "toggle";
-  key: "bypassFaceCamera";
+  key: "bypassFaceCamera" | "romTestMode";
   label: string;
   group: ConfigGroup;
 };
@@ -167,18 +183,18 @@ export const TL_CONFIG_FIELDS: ConfigField[] = [
     group: "Measurement",
     options: ROTATION_ALGORITHMS.map((id) => ({ value: id, label: ALGORITHM_INFO[id].label })),
   },
-  r("minMovementDeg", "Minimum rotation to begin", "Measurement", 2, 25, 0.5, "deg"),
-  r("minVelocityDegPerSec", "Minimum speed to begin", "Measurement", 1, 40, 1, "deg/s"),
-  r("movementConfirmMs", "Movement must last", "Measurement", 50, 800, 50, "ms"),
-  r("movementConfirmFrames", "Movement must last", "Measurement", 1, 15, 1, "frames"),
+  r("countdownMs", "Start countdown", "Measurement", 0, 3000, 100, "ms"),
+  r("minActiveMs", "Minimum active measurement duration", "Measurement", 0, 5000, 100, "ms"),
+  r("minPeakRomDeg", "Minimum ROM before peak can complete", "Measurement", 0, 60, 1, "deg"),
+  { kind: "toggle", key: "romTestMode", label: "ROM algorithm test mode", group: "Measurement" },
   r("stableMs", "Neutral stillness before calibration", "Neutral calibration", 200, 2000, 50, "ms"),
   r("calibrationMs", "Neutral calibration duration", "Neutral calibration", 400, 3000, 50, "ms"),
   r("minCalibrationFrames", "Minimum calibration frames", "Neutral calibration", 4, 60, 1, "frames"),
   r("neutralYawToleranceDeg", "Neutral shoulders-vs-pelvis tolerance", "Neutral calibration", 2, 20, 0.5, "deg"),
   r("maxCalibrationYawSdDeg", "Max yaw jitter while calibrating", "Neutral calibration", 0.3, 6, 0.1, "deg"),
   r("maxCalibrationPelvisJitter", "Max pelvis jitter while calibrating", "Neutral calibration", 0.01, 0.2, 0.005, "hip widths"),
-  r("holdMs", "Peak hold duration", "Peak hold", 500, 3000, 50, "ms"),
-  r("peakWindowDeg", "Peak stability window", "Peak hold", 0.5, 10, 0.5, "deg"),
+  r("holdMs", "Peak hold duration", "Peak hold", 200, 4000, 50, "ms"),
+  r("peakWindowDeg", "Peak stability tolerance", "Peak hold", 0.5, 10, 0.5, "deg"),
   r("peakVelocityDegPerSec", "Max speed during the hold", "Peak hold", 1, 20, 0.5, "deg/s"),
   {
     kind: "select",
@@ -238,9 +254,19 @@ export function normalizeConfig(input: unknown): TLConfig {
       (out as Record<string, unknown>)[field.key] = value;
     }
   }
+  if (typeof source.algorithm === "string" && ALGORITHM_ALIASES[source.algorithm]) out.algorithm = ALGORITHM_ALIASES[source.algorithm];
   if (source.facingThresholdVersion !== 2 && out.setupFacingWarnDeg === 12 && out.setupFacingFailDeg === 25) {
     out.setupFacingWarnDeg = 10;
     out.setupFacingFailDeg = 20;
+  }
+  if (source.filterVersion !== 2) {
+    if (out.angleBeta === 0.04) out.angleBeta = TL_CONFIG.angleBeta;
+    if (out.angleMinCutoffHz === 1.2) out.angleMinCutoffHz = TL_CONFIG.angleMinCutoffHz;
+    if (out.angleOutlierDeg === 12) out.angleOutlierDeg = TL_CONFIG.angleOutlierDeg;
+    if (out.landmarkBeta === 0.8) out.landmarkBeta = TL_CONFIG.landmarkBeta;
+    if (out.landmarkMinCutoffHz === 1.4) out.landmarkMinCutoffHz = TL_CONFIG.landmarkMinCutoffHz;
+    if (out.holdMs === 1750) out.holdMs = TL_CONFIG.holdMs;
+    if (out.peakWindowDeg === 3) out.peakWindowDeg = TL_CONFIG.peakWindowDeg;
   }
   return out;
 }

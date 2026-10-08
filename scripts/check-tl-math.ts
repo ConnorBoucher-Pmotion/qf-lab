@@ -1,6 +1,7 @@
 import { grade } from "../src/tl/tlCompensation";
 import { TL_CONFIG, normalizeConfig } from "../src/tl/tlConfig";
 import { TLSession } from "../src/tl/tlStateMachine";
+import { OneEuroFilter } from "../src/pose/oneEuro";
 import { captureYaws, cameraFacing, detectSigns, leanDegrees, readRotation, subjectYawDeg, syntheticSeated } from "../src/tl/tlRotation";
 import { LM } from "../src/pose/types";
 
@@ -20,17 +21,46 @@ near(baseline.pelvisYawDeg, 0, 1, "neutral pelvis yaw");
 
 const both = syntheticSeated({ shoulderYawDeg: 45, pelvisYawDeg: 8 });
 const relative = readRotation(both.world, both.image, baseline);
-near(relative.shoulderNeutralDeg, 45, 2, "shoulder vs neutral");
-near(relative.shoulderVsPelvisDeg, 37, 2, "shoulder vs pelvis");
-near(relative.worldTorsoDeg, 37, 3, "world torso");
-near(relative.imageDepthDeg, 37, 3, "image depth");
+near(relative.shoulderFromNeutralDeg, 45, 2, "3D shoulder yaw");
+near(relative.legacyDeg, 37, 2, "legacy shoulder minus pelvis");
+near(relative.torsoPelvisDeg, 37, 3, "shoulder vs pelvis vector");
+near(relative.depthWidthDeg, 45, 3, "width foreshortening");
 near(relative.pelvisYawDeg, 8, 2, "pelvis yaw");
 
 const lean = syntheticSeated({ leanForwardM: 0.16 });
 const leanReading = readRotation(lean.world, lean.image, baseline);
 const leanDeg = leanDegrees(lean.world, signs);
 if ((leanDeg.forward ?? 0) < 8) throw new Error(`forward lean too small: ${leanDeg.forward}`);
-if (Math.abs(leanReading.worldTorsoDeg ?? 99) > 6) throw new Error(`forward lean created yaw ${leanReading.worldTorsoDeg}`);
+if (Math.abs(leanReading.shoulderFromNeutralDeg ?? 99) > 6) throw new Error(`forward lean created shoulder yaw ${leanReading.shoulderFromNeutralDeg}`);
+if (Math.abs(leanReading.depthWidthDeg ?? 99) > 6) throw new Error(`forward lean created width yaw ${leanReading.depthWidthDeg}`);
+
+const turned = syntheticSeated({ shoulderYawDeg: 40 });
+const compressed = {
+  image: turned.image,
+  world: turned.world.map((point) => ({ ...point, z: point.z * 0.5 })),
+};
+const crushed = readRotation(compressed.world, compressed.image, baseline);
+near(crushed.shoulderFromNeutralDeg, 22.8, 2, "compressed Z shoulder yaw");
+near(crushed.depthWidthDeg, 40, 3, "width yaw survives compressed Z");
+if ((crushed.depthWidthDeg ?? 0) < (crushed.shoulderFromNeutralDeg ?? 0) + 10) {
+  throw new Error(`width method did not stay above the compressed yaw (${crushed.depthWidthDeg} vs ${crushed.shoulderFromNeutralDeg})`);
+}
+
+const back = readRotation(syntheticSeated().world, syntheticSeated().image, baseline);
+near(back.shoulderFromNeutralDeg, 0, 1.5, "shoulder yaw back at neutral");
+near(back.legacyDeg, 0, 1.5, "legacy back at neutral");
+near(back.depthWidthDeg, 0, 1.5, "width yaw back at neutral");
+
+function mirrorWorld(pose: ReturnType<typeof syntheticSeated>): ReturnType<typeof syntheticSeated> {
+  return { image: pose.image, world: pose.world.map((point) => ({ ...point, x: -point.x })) };
+}
+const mirroredNeutral = mirrorWorld(syntheticSeated());
+const mirroredSigns = detectSigns(mirroredNeutral.world);
+if (!mirroredSigns) throw new Error("mirrored signs missing");
+const mirroredBaseline = captureYaws(mirroredNeutral.world, mirroredNeutral.image, mirroredSigns);
+if (!mirroredBaseline) throw new Error("mirrored baseline missing");
+const mirroredTurn = readRotation(mirrorWorld(syntheticSeated({ shoulderYawDeg: 30 })).world, mirroredNeutral.image, mirroredBaseline);
+near(mirroredTurn.shoulderFromNeutralDeg, 30, 2, "mirrored frame keeps subject's right positive");
 
 const side = leanDegrees(syntheticSeated({ leanRightM: 0.14 }).world, signs);
 if ((side.lateral ?? 0) < 6) throw new Error(`lateral lean too small: ${side.lateral}`);
@@ -52,6 +82,9 @@ const fast = normalizeConfig({
   minCalibrationFrames: 4,
   holdMs: 280,
   movementConfirmMs: 90,
+  countdownMs: 0,
+  minActiveMs: 0,
+  minPeakRomDeg: 6,
   minMovementDeg: 6,
   minVelocityDegPerSec: 8,
   peakWindowDeg: 5,
@@ -73,8 +106,16 @@ function feed(session: TLSession, pose: ReturnType<typeof syntheticSeated>, fram
 const clean = new TLSession(fast, "right");
 let t = feed(clean, syntheticSeated(), 40, 0);
 const ready = clean.push({ width: 1280, height: 720, ...syntheticSeated() }, t);
-if (ready.state !== "READY" || ready.result) throw new Error(`neutral pose became ${ready.state}, result ${ready.result?.measuredRom}`);
-t += 33;
+if (ready.state !== "READY" || ready.result || ready.movementStarted || ready.rom.rawPeak != null) {
+  throw new Error(`neutral pose became ${ready.state}, result ${ready.result?.measuredRom}`);
+}
+const leaked = feed(clean, syntheticSeated({ shoulderYawDeg: 15 }), 20, t);
+const beforeStart = clean.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 15 }) }, leaked);
+if (beforeStart.movementStarted || beforeStart.state !== "READY" || beforeStart.rom.rawPeak != null || beforeStart.rom.validPeak != null) {
+  throw new Error(`rotation before Start was captured (${beforeStart.state}, peak ${beforeStart.rom.rawPeak})`);
+}
+clean.arm(leaked);
+t = leaked + 33;
 for (let step = 1; step <= 12; step += 1) {
   t = feed(clean, syntheticSeated({ shoulderYawDeg: step * 3, pelvisYawDeg: 1 }), 2, t);
 }
@@ -87,6 +128,8 @@ if ((done.result.measuredRom ?? 0) < 8) throw new Error("resting pose was saved 
 
 const mixed = new TLSession(fast, "right");
 t = feed(mixed, syntheticSeated(), 40, 0);
+mixed.arm(t);
+t += 33;
 for (let step = 1; step <= 10; step += 1) t = feed(mixed, syntheticSeated({ shoulderYawDeg: step * 4 }), 2, t);
 t = feed(mixed, syntheticSeated({ shoulderYawDeg: 40 }), 3, t);
 for (let step = 1; step <= 8; step += 1) t = feed(mixed, syntheticSeated({ shoulderYawDeg: 40 + step * 2, leanRightM: 0.22 }), 2, t);
@@ -112,10 +155,7 @@ t = feed(left, syntheticSeated({ shoulderYawDeg: -30, pelvisYawDeg: 0 }), 16, t)
 const leftSnap = left.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: -30 }) }, t);
 if ((leftSnap.rom.current ?? 0) < 20) throw new Error(`left rotation did not read positive for the subject: ${leftSnap.rom.current}`);
 
-/** Real MediaPipe puts the subject's left landmarks at +x. The old signed hip yaw then wraps to ~180°. */
-function mirrorWorld(pose: ReturnType<typeof syntheticSeated>): ReturnType<typeof syntheticSeated> {
-  return { image: pose.image, world: pose.world.map((point) => ({ ...point, x: -point.x })) };
-}
+/** Real MediaPipe puts the subject's left landmarks at +x. The old signed hip yaw then wraps to ~180° when xSign is left at its default. */
 const frontalCamera = mirrorWorld(syntheticSeated());
 const oldHipYaw = subjectYawDeg(frontalCamera.world[LM.leftHip], frontalCamera.world[LM.rightHip], 1);
 if (oldHipYaw == null || Math.abs(Math.abs(oldHipYaw) - 180) > 8) throw new Error(`old face-camera yaw should wrap near 180° on a frontal pose, got ${oldHipYaw}`);
@@ -163,7 +203,9 @@ for (const peak of [28, 16, 34]) {
   }
   clock += 33;
   const wobble = life.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 3 }) }, clock);
-  if (wobble.movementStarted || wobble.state !== "READY") throw new Error(`a 3° settle started trial ${roms.length + 1}`);
+  if (wobble.movementStarted || wobble.state !== "READY" || wobble.rom.active != null) throw new Error(`a 3° settle started trial ${roms.length + 1}`);
+  life.arm(clock);
+  clock += 33;
   for (let step = 1; step <= 36; step += 1) clock = feed(life, syntheticSeated({ shoulderYawDeg: (peak * step) / 36 }), 1, clock);
   clock = feed(life, syntheticSeated({ shoulderYawDeg: peak }), 24, clock);
   const finished = life.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: peak }) }, clock);
@@ -182,6 +224,8 @@ if (Math.abs(roms[0] - roms[1]) < 5 || Math.abs(roms[1] - roms[2]) < 5) throw ne
 
 const redo = new TLSession(normalizeConfig({ ...fast, movementConfirmFrames: 2 }), "right");
 clock = feed(redo, syntheticSeated(), 40, 0);
+redo.arm(clock);
+clock += 33;
 clock = feed(redo, syntheticSeated({ shoulderYawDeg: 20 }), 8, clock);
 const mid = redo.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 20 }) }, clock);
 if (!mid.movementStarted) throw new Error("reset test never started");
@@ -189,11 +233,77 @@ redo.reset();
 const again = redo.push({ width: 1280, height: 720, ...syntheticSeated() }, clock + 33);
 if (again.movementStarted || again.baselineReady || again.rom.validPeak != null) throw new Error("reset current trial kept the attempt");
 
+const counted = new TLSession(normalizeConfig({ ...fast, countdownMs: 900 }), "right");
+clock = feed(counted, syntheticSeated(), 40, 0);
+counted.arm(clock);
+const during = counted.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 25 }) }, clock + 500);
+if (during.state !== "COUNTDOWN" || during.movementStarted || during.rom.rawPeak != null || during.rom.validPeak != null || during.rom.active != null) {
+  throw new Error(`countdown counted as a measurement (${during.state}, peak ${during.rom.rawPeak}, label ${during.countdownLabel})`);
+}
+if (during.countdownLabel !== "2" && during.countdownLabel !== "1" && during.countdownLabel !== "3") {
+  throw new Error(`countdown label ${during.countdownLabel}`);
+}
+const rotateCue = counted.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 25 }) }, clock + 1000);
+if (rotateCue.countdownLabel !== "ROTATE" || rotateCue.movementStarted || rotateCue.rom.rawPeak != null) {
+  throw new Error(`ROTATE cue started measurement (${rotateCue.countdownLabel}, peak ${rotateCue.rom.rawPeak})`);
+}
+counted.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 25 }) }, clock + 1300);
+const measuring = counted.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 25 }) }, clock + 1333);
+if (!measuring.movementStarted || measuring.rom.active == null) throw new Error(`measurement did not begin after ROTATE (${measuring.state})`);
+
+const tiny = new TLSession(normalizeConfig({ ...fast, minPeakRomDeg: 20, minActiveMs: 400, holdMs: 200 }), "right");
+clock = feed(tiny, syntheticSeated(), 40, 0);
+tiny.arm(clock);
+clock = feed(tiny, syntheticSeated({ shoulderYawDeg: 5 }), 40, clock + 33);
+const five = tiny.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 5 }) }, clock);
+if (five.result || five.state === "COMPLETE" || five.state === "HOLD") throw new Error(`a 5° pause finished the trial (${five.state})`);
+
+const manual = new TLSession(normalizeConfig({ ...fast, minPeakRomDeg: 20 }), "right");
+clock = feed(manual, syntheticSeated(), 40, 0);
+manual.arm(clock);
+clock = feed(manual, syntheticSeated({ shoulderYawDeg: 12 }), 8, clock + 33);
+manual.acceptPeak();
+const accepted = manual.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 12 }) }, clock);
+if (accepted.state !== "COMPLETE" || accepted.result?.measuredRom == null) throw new Error(`accept peak did not store the trial (${accepted.state})`);
+
+const tester = new TLSession(normalizeConfig({ ...fast, romTestMode: true, minPeakRomDeg: 5, holdMs: 100 }), "right");
+clock = feed(tester, syntheticSeated(), 40, 0);
+if (!tester.push({ width: 1280, height: 720, ...syntheticSeated() }, clock).movementStarted) throw new Error("test mode did not start after calibration");
+clock = feed(tester, syntheticSeated({ shoulderYawDeg: 35 }), 30, clock);
+clock = feed(tester, syntheticSeated({ shoulderYawDeg: -28 }), 20, clock);
+const free = tester.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: -28 }) }, clock);
+if (free.result) throw new Error("test mode completed a trial on its own");
+const shoulderRow = free.algorithmsLive.find((row) => row.id === "shoulderYaw");
+if ((shoulderRow?.rightPeak ?? 0) < 25 || (shoulderRow?.leftPeak ?? 0) < 20) {
+  throw new Error(`test mode peaks right ${shoulderRow?.rightPeak} left ${shoulderRow?.leftPeak}`);
+}
+
+const oldFilter = new OneEuroFilter(1.2, 0.04);
+const newFilter = new OneEuroFilter(3, 0.35);
+let oldValue = 0;
+let newValue = 0;
+for (let i = 1; i <= 30; i += 1) {
+  const target = (40 * i) / 30;
+  oldValue = oldFilter.filter(target, i * 33, 1);
+  newValue = newFilter.filter(target, i * 33, 1);
+}
+for (let i = 31; i <= 60; i += 1) {
+  oldValue = oldFilter.filter(40, i * 33, 1);
+  newValue = newFilter.filter(40, i * 33, 1);
+}
+
 console.log("TL math checks passed");
 console.log({
-  relative: relative.shoulderVsPelvisDeg?.toFixed(1),
-  neutralShoulder: relative.shoulderNeutralDeg?.toFixed(1),
+  legacy: relative.legacyDeg?.toFixed(1),
+  shoulderYaw: relative.shoulderFromNeutralDeg?.toFixed(1),
+  torsoPelvis: relative.torsoPelvisDeg?.toFixed(1),
+  depthWidth: relative.depthWidthDeg?.toFixed(1),
+  compressedYaw: crushed.shoulderFromNeutralDeg?.toFixed(1),
+  compressedWidth: crushed.depthWidthDeg?.toFixed(1),
+  neutralReturn: back.shoulderFromNeutralDeg?.toFixed(1),
+  mirroredRight: mirroredTurn.shoulderFromNeutralDeg?.toFixed(1),
+  oldFilterAfterHold: oldValue.toFixed(1),
+  newFilterAfterHold: newValue.toFixed(1),
   valid: done.result.measuredRom?.toFixed(1),
   raw: split.result.rawMaximum?.toFixed(1),
-  validWhilePelvisFailed: split.result.measuredRom?.toFixed(1),
 });

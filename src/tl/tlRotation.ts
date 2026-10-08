@@ -1,62 +1,79 @@
 import { angleDelta, midpoint } from "../pose/coordinateNormalization";
 import { LM, type Vec } from "../pose/types";
 
-export const ROTATION_ALGORITHMS = ["shoulderNeutral", "shoulderVsPelvis", "worldTorso", "imageDepth"] as const;
+export const ROTATION_ALGORITHMS = ["legacy", "shoulderYaw", "torsoPelvis", "depthWidth"] as const;
 export type RotationAlgorithm = (typeof ROTATION_ALGORITHMS)[number];
 
 export const ALGORITHM_INFO: Record<RotationAlgorithm, { label: string; note: string }> = {
-  shoulderNeutral: {
-    label: "A · Shoulder vs neutral",
-    note: "Shoulder yaw relative to the calibrated shoulder axis. Pelvic rotation stays inside this number.",
+  legacy: {
+    label: "A · Current / legacy",
+    note: "Previous method: world-landmark shoulder yaw minus pelvis yaw, then minus the calibrated neutral. Pelvis yaw is part of this formula, so a pelvis estimate that turns with the chest lowers the number. Compensation checks are not subtracted again.",
   },
-  shoulderVsPelvis: {
-    label: "B · Shoulder vs pelvis",
-    note: "Shoulder yaw minus pelvis yaw, relative to the calibrated neutral. A pelvis that turns with the chest is not counted as torso ROM.",
+  shoulderYaw: {
+    label: "B · 3D shoulder yaw",
+    note: "Yaw of the world-landmark shoulder vector (right minus left) around vertical, minus the calibrated shoulder yaw. Pelvis rotation is not removed.",
   },
-  worldTorso: {
-    label: "C · World torso frame",
-    note: "Shoulder-versus-pelvis yaw after both axes are projected perpendicular to the torso long axis, so leaning changes the angle less.",
+  torsoPelvis: {
+    label: "C · Shoulder vs pelvis",
+    note: "Signed angle from the pelvis vector to the shoulder vector in the horizontal plane, minus that same angle at neutral.",
   },
-  imageDepth: {
-    label: "D · Image depth",
-    note: "Shoulder-versus-pelvis yaw from normalized image x and image depth. Kept for comparison. The flat 2D shoulder-line angle is not used as ROM.",
+  depthWidth: {
+    label: "D · Depth / width",
+    note: "Experimental. Magnitude is how much the horizontal shoulder width has narrowed since neutral (acos of the width ratio). The sign comes only from which shoulder is closer. It does not trust the size of the Z value. A front camera often keeps the 2D shoulder line flat while the width and depth change.",
   },
 };
 
-export type FrameSigns = { yUp: number; zFront: number };
+/** Old saved config values, from before the algorithm comparison. */
+export const ALGORITHM_ALIASES: Record<string, RotationAlgorithm> = {
+  shoulderNeutral: "shoulderYaw",
+  shoulderVsPelvis: "legacy",
+  worldTorso: "torsoPelvis",
+  imageDepth: "depthWidth",
+  legacy: "legacy",
+  shoulderYaw: "shoulderYaw",
+  torsoPelvis: "torsoPelvis",
+  depthWidth: "depthWidth",
+};
+
+export type FrameSigns = { yUp: number; zFront: number; xSign: number };
 
 export type V3 = { x: number; y: number; z: number };
 
 export type YawBaseline = {
   shoulderYawDeg: number;
   pelvisYawDeg: number;
-  torsoShoulderYawDeg: number;
-  torsoPelvisYawDeg: number;
-  imageShoulderYawDeg: number;
-  imagePelvisYawDeg: number;
+  /** Signed shoulder-versus-pelvis angle at neutral, from the vector method. */
+  relativeYawDeg: number;
+  /** Horizontal shoulder width at neutral, in the same units as the landmarks. */
+  shoulderSpan: number;
+  torsoScale: number;
+  imageShoulderSpan: number;
+  imageTorsoScale: number;
   signs: FrameSigns;
 };
 
 export type RotationReading = {
   shoulderYawDeg: number | null;
   pelvisYawDeg: number | null;
-  torsoShoulderYawDeg: number | null;
-  torsoPelvisYawDeg: number | null;
+  /** Shoulder yaw minus the calibrated shoulder yaw. Null before calibration. */
+  shoulderFromNeutralDeg: number | null;
+  /** Legacy shoulder-minus-pelvis yaw from neutral. Before calibration this is the absolute shoulder-minus-pelvis yaw. */
+  legacyDeg: number | null;
+  torsoPelvisDeg: number | null;
+  depthWidthDeg: number | null;
+  imageWidthDeg: number | null;
+  /** Current horizontal shoulder width divided by the neutral width, after torso-scale correction. 1 is unchanged. */
+  shoulderSpanRatio: number | null;
   imageShoulderYawDeg: number | null;
-  imagePelvisYawDeg: number | null;
   headYawDeg: number | null;
-  shoulderNeutralDeg: number | null;
-  shoulderVsPelvisDeg: number | null;
-  worldTorsoDeg: number | null;
-  imageDepthDeg: number | null;
   imageLineDeltaDeg: number | null;
 };
 
 export function primaryAngle(reading: RotationReading, algorithm: RotationAlgorithm): number | null {
-  if (algorithm === "shoulderNeutral") return reading.shoulderNeutralDeg;
-  if (algorithm === "shoulderVsPelvis") return reading.shoulderVsPelvisDeg;
-  if (algorithm === "worldTorso") return reading.worldTorsoDeg;
-  return reading.imageDepthDeg;
+  if (algorithm === "legacy") return reading.legacyDeg;
+  if (algorithm === "shoulderYaw") return reading.shoulderFromNeutralDeg;
+  if (algorithm === "torsoPelvis") return reading.torsoPelvisDeg;
+  return reading.depthWidthDeg;
 }
 
 /** Positive is the subject's right rotation. */
@@ -72,15 +89,22 @@ export function detectSigns(world: Vec[]): FrameSigns | null {
   if (shoulder.visibility < 0.05 || hip.visibility < 0.05) return null;
   const yUp = shoulder.y >= hip.y ? 1 : -1;
   const noseGap = world[LM.nose].z - hip.z;
-  return { yUp, zFront: Math.abs(noseGap) < 1e-6 ? 1 : noseGap > 0 ? 1 : -1 };
+  const left = world[LM.leftShoulder];
+  const right = world[LM.rightShoulder];
+  // Synthetic poses put the subject's right shoulder at +x. A real MediaPipe pose often puts the subject's left shoulder at +x.
+  // Locking the sign at calibration keeps a later shoulder crossing from flipping the angle.
+  const xSign = right.x >= left.x ? 1 : -1;
+  return { yUp, zFront: Math.abs(noseGap) < 1e-6 ? 1 : noseGap > 0 ? 1 : -1, xSign };
 }
 
 /**
  * Yaw of the left-to-right axis. Subject's right rotation is positive:
  * the left landmark moves toward the camera and the right landmark moves away.
+ * `xSign` is -1 when the subject's left landmark sits at +x, so a frontal pose
+ * stays near 0° instead of wrapping to ±180°.
  */
-export function subjectYawDeg(left: V3, right: V3, zFront: number): number | null {
-  const dx = right.x - left.x;
+export function subjectYawDeg(left: V3, right: V3, zFront: number, xSign = 1): number | null {
+  const dx = (right.x - left.x) * xSign;
   const dz = (right.z - left.z) * zFront;
   if (Math.hypot(dx, dz) < 1e-6) return null;
   return (-Math.atan2(dz, dx) * 180) / Math.PI;
@@ -199,60 +223,114 @@ export function readRotation(world: Vec[], image: Vec[], baseline: YawBaseline |
   if (world.length < 33) return empty;
   const signs = baseline?.signs ?? detectSigns(world);
   if (!signs) return empty;
-  const imageSigns = image.length >= 33 ? detectSigns(image) : null;
-  const shoulder = subjectYawDeg(world[LM.leftShoulder], world[LM.rightShoulder], signs.zFront);
-  const pelvis = subjectYawDeg(world[LM.leftHip], world[LM.rightHip], signs.zFront);
-  const torso = torsoYaws(world, signs);
-  const imageShoulder = imageSigns ? subjectYawDeg(image[LM.leftShoulder], image[LM.rightShoulder], imageSigns.zFront) : null;
-  const imagePelvis = imageSigns ? subjectYawDeg(image[LM.leftHip], image[LM.rightHip], imageSigns.zFront) : null;
-  const head = subjectYawDeg(world[LM.leftEar], world[LM.rightEar], signs.zFront);
+  const liveImageSigns = image.length >= 33 ? detectSigns(image) : null;
+  const shoulder = yawOf(world[LM.leftShoulder], world[LM.rightShoulder], signs);
+  const pelvis = yawOf(world[LM.leftHip], world[LM.rightHip], signs);
+  const imageShoulder = liveImageSigns ? yawOf(image[LM.leftShoulder], image[LM.rightShoulder], liveImageSigns) : null;
+  const head = yawOf(world[LM.leftEar], world[LM.rightEar], signs);
   const relative = shoulder != null && pelvis != null ? angleDelta(shoulder, pelvis) : null;
-  const torsoRelative = torso.shoulder != null && torso.pelvis != null ? angleDelta(torso.shoulder, torso.pelvis) : null;
-  const imageRelative = imageShoulder != null && imagePelvis != null ? angleDelta(imageShoulder, imagePelvis) : null;
+  const vectorRelative = signedAxisAngle(world[LM.leftShoulder], world[LM.rightShoulder], world[LM.leftHip], world[LM.rightHip], signs);
   const baseRelative = baseline ? angleDelta(baseline.shoulderYawDeg, baseline.pelvisYawDeg) : 0;
-  const baseTorso = baseline ? angleDelta(baseline.torsoShoulderYawDeg, baseline.torsoPelvisYawDeg) : 0;
-  const baseImage = baseline ? angleDelta(baseline.imageShoulderYawDeg, baseline.imagePelvisYawDeg) : 0;
+  const baseVector = baseline ? baseline.relativeYawDeg : 0;
+  const depth = baseline
+    ? foreshortenedYaw(world[LM.leftShoulder], world[LM.rightShoulder], signs, baseline.shoulderSpan, baseline.torsoScale, torsoScaleOf(world, signs))
+    : { degrees: null, ratio: null };
+  const imageDepth =
+    baseline && liveImageSigns
+      ? foreshortenedYaw(
+          image[LM.leftShoulder],
+          image[LM.rightShoulder],
+          liveImageSigns,
+          baseline.imageShoulderSpan,
+          baseline.imageTorsoScale,
+          torsoScaleOf(image, liveImageSigns)
+        )
+      : { degrees: null, ratio: null };
   return {
     shoulderYawDeg: shoulder,
     pelvisYawDeg: pelvis,
-    torsoShoulderYawDeg: torso.shoulder,
-    torsoPelvisYawDeg: torso.pelvis,
+    shoulderFromNeutralDeg: baseline && shoulder != null ? angleDelta(shoulder, baseline.shoulderYawDeg) : null,
+    legacyDeg: relative == null ? null : baseline ? angleDelta(relative, baseRelative) : relative,
+    torsoPelvisDeg: vectorRelative == null ? null : baseline ? angleDelta(vectorRelative, baseVector) : vectorRelative,
+    depthWidthDeg: depth.degrees,
+    imageWidthDeg: imageDepth.degrees,
+    shoulderSpanRatio: depth.ratio,
     imageShoulderYawDeg: imageShoulder,
-    imagePelvisYawDeg: imagePelvis,
     headYawDeg: head,
-    shoulderNeutralDeg: baseline && shoulder != null ? angleDelta(shoulder, baseline.shoulderYawDeg) : shoulder,
-    shoulderVsPelvisDeg: relative == null ? null : baseline ? angleDelta(relative, baseRelative) : relative,
-    worldTorsoDeg: torsoRelative == null ? null : baseline ? angleDelta(torsoRelative, baseTorso) : torsoRelative,
-    imageDepthDeg: imageRelative == null ? null : baseline ? angleDelta(imageRelative, baseImage) : imageRelative,
     imageLineDeltaDeg: imageLineDelta(image),
   };
 }
 
 export function captureYaws(world: Vec[], image: Vec[], signs: FrameSigns): YawBaseline | null {
   const reading = readRotation(world, image, null);
-  if (reading.shoulderYawDeg == null || reading.pelvisYawDeg == null || reading.torsoShoulderYawDeg == null || reading.torsoPelvisYawDeg == null) {
-    return null;
-  }
+  if (reading.shoulderYawDeg == null || reading.pelvisYawDeg == null) return null;
+  const relativeYawDeg = signedAxisAngle(world[LM.leftShoulder], world[LM.rightShoulder], world[LM.leftHip], world[LM.rightHip], signs);
+  if (relativeYawDeg == null) return null;
+  const imageSigns = image.length >= 33 ? detectSigns(image) : null;
   return {
     shoulderYawDeg: reading.shoulderYawDeg,
     pelvisYawDeg: reading.pelvisYawDeg,
-    torsoShoulderYawDeg: reading.torsoShoulderYawDeg,
-    torsoPelvisYawDeg: reading.torsoPelvisYawDeg,
-    imageShoulderYawDeg: reading.imageShoulderYawDeg ?? reading.shoulderYawDeg,
-    imagePelvisYawDeg: reading.imagePelvisYawDeg ?? reading.pelvisYawDeg,
+    relativeYawDeg,
+    shoulderSpan: axisSpan(world[LM.leftShoulder], world[LM.rightShoulder], signs.xSign),
+    torsoScale: torsoScaleOf(world, signs),
+    imageShoulderSpan: imageSigns ? axisSpan(image[LM.leftShoulder], image[LM.rightShoulder], imageSigns.xSign) : axisSpan(world[LM.leftShoulder], world[LM.rightShoulder], signs.xSign),
+    imageTorsoScale: imageSigns ? torsoScaleOf(image, imageSigns) : torsoScaleOf(world, signs),
     signs,
   };
 }
 
-function torsoYaws(world: Vec[], signs: FrameSigns): { shoulder: number | null; pelvis: number | null } {
-  const frame = bodyAxes(world, signs);
-  if (!frame) return { shoulder: null, pelvis: null };
-  const shoulder = projectPerp(sub(world[LM.rightShoulder], world[LM.leftShoulder]), frame.up);
-  const pelvis = projectPerp(sub(world[LM.rightHip], world[LM.leftHip]), frame.up);
-  return {
-    shoulder: subjectYawDeg(scale(shoulder, -0.5), scale(shoulder, 0.5), signs.zFront),
-    pelvis: subjectYawDeg(scale(pelvis, -0.5), scale(pelvis, 0.5), signs.zFront),
-  };
+function yawOf(left: V3, right: V3, signs: FrameSigns): number | null {
+  return subjectYawDeg(left, right, signs.zFront, signs.xSign);
+}
+
+/**
+ * Magnitude from shoulder-width foreshortening. Sign from which shoulder is closer.
+ * Z is not used as a length, because MediaPipe's depth is often compressed on a frontal camera.
+ */
+export function foreshortenedYaw(
+  left: V3,
+  right: V3,
+  signs: FrameSigns,
+  neutralSpan: number,
+  neutralScale: number,
+  currentScale: number
+): { degrees: number | null; ratio: number | null } {
+  const dx = (right.x - left.x) * signs.xSign;
+  const dz = (right.z - left.z) * signs.zFront;
+  const span = Math.abs(dx);
+  if (neutralSpan < 1e-5 || currentScale < 1e-5 || neutralScale < 1e-5) return { degrees: null, ratio: null };
+  const ratio = span / currentScale / (neutralSpan / neutralScale);
+  if (!Number.isFinite(ratio)) return { degrees: null, ratio: null };
+  const magnitude = (Math.acos(Math.max(-1, Math.min(1, ratio))) * 180) / Math.PI;
+  const dead = Math.max(neutralSpan * 0.035, 1e-4);
+  const sign = dz < -dead ? 1 : dz > dead ? -1 : 0;
+  if (sign === 0) return { degrees: magnitude < 6 ? 0 : null, ratio };
+  return { degrees: sign * magnitude, ratio };
+}
+
+function signedAxisAngle(leftShoulder: V3, rightShoulder: V3, leftHip: V3, rightHip: V3, signs: FrameSigns): number | null {
+  const shoulder = horizontal(sub(rightShoulder, leftShoulder), signs);
+  const pelvis = horizontal(sub(rightHip, leftHip), signs);
+  const shoulderMag = Math.hypot(shoulder.x, shoulder.z);
+  const pelvisMag = Math.hypot(pelvis.x, pelvis.z);
+  if (shoulderMag < 1e-6 || pelvisMag < 1e-6) return null;
+  const dotXZ = shoulder.x * pelvis.x + shoulder.z * pelvis.z;
+  const crossXZ = shoulder.x * pelvis.z - shoulder.z * pelvis.x;
+  return (Math.atan2(crossXZ, dotXZ) * 180) / Math.PI;
+}
+
+function horizontal(vector: V3, signs: FrameSigns): V3 {
+  return { x: vector.x * signs.xSign, y: 0, z: vector.z * signs.zFront };
+}
+
+function axisSpan(left: V3, right: V3, xSign: number): number {
+  return Math.abs((right.x - left.x) * xSign);
+}
+
+function torsoScaleOf(points: Vec[], signs: FrameSigns): number {
+  const shoulder = midpoint(points[LM.leftShoulder], points[LM.rightShoulder]);
+  const hip = midpoint(points[LM.leftHip], points[LM.rightHip]);
+  return Math.max(Math.abs((shoulder.y - hip.y) * signs.yUp), 1e-4);
 }
 
 export function bodyAxes(world: Vec[], signs: FrameSigns): { up: V3; right: V3; forward: V3 } | null {
@@ -291,15 +369,14 @@ function emptyReading(): RotationReading {
   return {
     shoulderYawDeg: null,
     pelvisYawDeg: null,
-    torsoShoulderYawDeg: null,
-    torsoPelvisYawDeg: null,
+    shoulderFromNeutralDeg: null,
+    legacyDeg: null,
+    torsoPelvisDeg: null,
+    depthWidthDeg: null,
+    imageWidthDeg: null,
+    shoulderSpanRatio: null,
     imageShoulderYawDeg: null,
-    imagePelvisYawDeg: null,
     headYawDeg: null,
-    shoulderNeutralDeg: null,
-    shoulderVsPelvisDeg: null,
-    worldTorsoDeg: null,
-    imageDepthDeg: null,
     imageLineDeltaDeg: null,
   };
 }

@@ -13,6 +13,8 @@ type Props = {
   config: TLConfig;
   resetSignal: number;
   nextSignal: number;
+  startSignal: number;
+  acceptSignal: number;
   preRollMs: number;
   postRollMs: number;
   onSnapshot: (snapshot: TLSnapshot) => void;
@@ -20,7 +22,7 @@ type Props = {
   onRecorderStatus: (status: RecorderStatus) => void;
 };
 
-export function CameraView({ direction, config, resetSignal, nextSignal, preRollMs, postRollMs, onSnapshot, onRecording, onRecorderStatus }: Props) {
+export function CameraView({ direction, config, resetSignal, nextSignal, startSignal, acceptSignal, preRollMs, postRollMs, onSnapshot, onRecording, onRecorderStatus }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onSnapshotRef = useRef(onSnapshot);
   const onRecordingRef = useRef(onRecording);
@@ -54,6 +56,14 @@ export function CameraView({ direction, config, resetSignal, nextSignal, preRoll
     if (nextSignal === 0) return;
     sessionRef.current?.nextTrial();
   }, [nextSignal]);
+  useEffect(() => {
+    if (startSignal === 0) return;
+    sessionRef.current?.arm(performance.now());
+  }, [startSignal]);
+  useEffect(() => {
+    if (acceptSignal === 0) return;
+    sessionRef.current?.acceptPeak();
+  }, [acceptSignal]);
 
   useEffect(() => {
     const host = hostRef.current;

@@ -6,6 +6,7 @@ import { setupChecks, trialChecks, grade } from "./tlCompensation";
 import { CAMERA_NOTE, type TLConfig } from "./tlConfig";
 import { trackingConfidence } from "./tlQuality";
 import {
+  ROTATION_ALGORITHMS,
   cameraFacing,
   captureYaws,
   detectSigns,
@@ -17,10 +18,13 @@ import {
   sub,
   type CameraFacing,
   type FrameSigns,
+  type RotationAlgorithm,
+  type RotationReading,
   type V3,
   type YawBaseline,
 } from "./tlRotation";
 import type {
+  AlgorithmLive,
   CompensationSnapshot,
   ConstraintCheck,
   RotationDirection,
@@ -56,7 +60,7 @@ const EMPTY_METRICS: TLMetrics = {
   shoulderYawDeg: null,
   pelvisYawDeg: null,
   headYawDeg: null,
-  algorithms: { shoulderNeutral: null, shoulderVsPelvis: null, worldTorso: null, imageDepth: null },
+  algorithms: { legacy: null, shoulderYaw: null, torsoPelvis: null, depthWidth: null },
   pelvisRotationDeg: null,
   pelvisTranslationPct: null,
   lateralLeanDeg: null,
@@ -77,6 +81,10 @@ const EMPTY_METRICS: TLMetrics = {
   hipMid: null,
   shoulderVector: null,
   pelvisVector: null,
+  imageLeftShoulder: null,
+  imageRightShoulder: null,
+  imageLeftHip: null,
+  imageRightHip: null,
 };
 
 export class TLSession {
@@ -91,7 +99,6 @@ export class TLSession {
   private calib: CalSample[] = [];
   private calibStart = 0;
   private stableFor = 0;
-  private confirmFor = 0;
   private confirmFrames = 0;
   private holdFor = 0;
   private failFor = 0;
@@ -99,7 +106,12 @@ export class TLSession {
   private lastRom: number | null = null;
   private lastT: number | null = null;
   private rawPeak: number | null = null;
+  private filteredPeak: number | null = null;
   private validPeak: number | null = null;
+  private algoPeaks: Record<RotationAlgorithm, { left: number | null; right: number | null }> = emptyAlgoPeaks();
+  private countdownEndsAt: number | null = null;
+  private rotateCueAt: number | null = null;
+  private activeFor = 0;
   private atValid: CompensationSnapshot | null = null;
   private atRaw: CompensationSnapshot | null = null;
   private movementStarted = false;
@@ -125,10 +137,36 @@ export class TLSession {
   }
 
   setConfig(config: TLConfig): void {
+    const enterTest = config.romTestMode && !this.config.romTestMode;
     this.config = config;
     this.poseFilter.options = this.filterOptions();
     this.angleFilter.minCutoff = config.angleMinCutoffHz;
     this.angleFilter.beta = config.angleBeta;
+    if (enterTest && this.baseline && !this.movementStarted && !this.result && this.countdownEndsAt == null) {
+      this.beginMeasuring(this.lastT ?? performance.now());
+    }
+  }
+
+  /** Manual start. Ignored until a neutral baseline exists. Does not record peaks during the countdown. */
+  arm(now: number): void {
+    if (!this.baseline || this.result || this.movementStarted || this.countdownEndsAt != null) return;
+    if (this.state !== "READY") return;
+    if (this.config.countdownMs <= 0 || this.config.romTestMode) {
+      this.beginMeasuring(now);
+      return;
+    }
+    this.rotateCueAt = now + this.config.countdownMs;
+    this.countdownEndsAt = now + this.config.countdownMs + 400;
+    this.state = "COUNTDOWN";
+    this.note("Countdown started", now);
+  }
+
+  /** Development override. Stores the current peaks without waiting for the hold. */
+  acceptPeak(): void {
+    if (!this.movementStarted || this.result) return;
+    const now = this.lastT ?? performance.now();
+    if (this.validPeak == null && this.lastFiltered != null) this.validPeak = directionalRom(this.lastFiltered, this.direction);
+    this.finish(true, now, "Peak accepted manually.", true);
   }
 
   setDirection(direction: RotationDirection): void {
@@ -176,15 +214,19 @@ export class TLSession {
     this.frameTimes.push(now);
     this.frameTimes = this.frameTimes.filter((t) => now - t < 1000);
     const filtered = frame.world.length >= 33 && frame.image.length >= 33 ? this.poseFilter.apply(frame.image, frame.world, now) : null;
-    const image = filtered?.image ?? [];
-    const world = filtered?.world ?? [];
+    const image = filtered?.gatedImage ?? [];
+    const world = filtered?.gatedWorld ?? [];
+    const smoothedImage = filtered?.image ?? [];
+    const smoothedWorld = filtered?.world ?? [];
     const tracking = this.tracking(world, dt);
     const reading = world.length >= 33 ? readRotation(world, image, this.baseline?.yaws ?? null) : null;
+    const smoothedReading = smoothedWorld.length >= 33 ? readRotation(smoothedWorld, smoothedImage, this.baseline?.yaws ?? null) : null;
     const signedRaw = reading ? primaryAngle(reading, this.config.algorithm) : null;
+    const signedSmoothed = smoothedReading ? primaryAngle(smoothedReading, this.config.algorithm) : null;
     const smoothed = tracking.criticalOk ? this.smooth(signedRaw, now) : { raw: signedRaw, filtered: this.lastFiltered };
     const current = directionalRom(smoothed.filtered, this.direction);
     const velocity = this.velocity(current, dt);
-    const metrics = this.metrics(world, reading, velocity, tracking);
+    const metrics = this.metrics(world, image, reading, velocity, tracking);
     const measured = cameraFacing(world);
     const facing: CameraFacing = {
       ...measured,
@@ -198,15 +240,23 @@ export class TLSession {
     const hardNow = checks.some((check) => check.category === "hard" && check.status === "fail");
     this.failFor = hardNow ? this.failFor + dt : 0;
     const hardFailed = hardNow && this.failFor >= this.config.hardFailPersistMs;
-    this.advance({ now, dt, current, velocity, tracking, setup, hardFailed, metrics, image, world });
+    this.advance({ now, dt, current, raw: directionalRom(smoothed.raw, this.direction), velocity, tracking, setup, hardFailed, metrics, image, world, reading });
     this.blockedBy = this.explain(setup, tracking, current);
-    const measuring = this.state === "ROTATING" || this.state === "PEAK" || this.state === "HOLD" || this.state === "TRACKING_LOST";
+    const measuring = this.state === "MEASURING" || this.state === "PEAK" || this.state === "HOLD" || this.state === "TRACKING_LOST";
 
     return {
       state: this.state,
       instruction: this.instruction(setup, tracking),
       direction: this.direction,
       algorithm: this.config.algorithm,
+      countdownLabel: this.countdownLabel(now),
+      algorithmsLive: this.algorithmRows(reading),
+      neutralShoulderYawDeg: this.baseline?.yaws.shoulderYawDeg ?? null,
+      neutralPelvisYawDeg: this.baseline?.yaws.pelvisYawDeg ?? null,
+      shoulderSpanRatio: reading?.shoulderSpanRatio ?? null,
+      imageWidthDeg: reading?.imageWidthDeg ?? null,
+      imageShoulderYawDeg: reading?.imageShoulderYawDeg ?? null,
+      romTestMode: this.config.romTestMode,
       metrics,
       tracking,
       setupChecks: setup,
@@ -215,10 +265,12 @@ export class TLSession {
       rom: {
         current,
         raw: smoothed.raw == null ? null : directionalRom(smoothed.raw, this.direction),
+        landmarkSmoothed: signedSmoothed == null ? null : directionalRom(signedSmoothed, this.direction),
         filtered: current,
         active: !this.movementStarted ? null : this.result ? this.validPeak : current,
         validPeak: this.movementStarted ? this.validPeak : null,
         rawPeak: this.movementStarted ? this.rawPeak : null,
+        filteredPeak: this.movementStarted ? this.filteredPeak : null,
       },
       holdProgress: this.movementStarted && this.config.holdMs > 0 ? Math.max(0, Math.min(1, this.holdFor / this.config.holdMs)) : 0,
       calibrationProgress: this.calibrationProgress(now),
@@ -236,7 +288,7 @@ export class TLSession {
       quality: trackingConfidence(tracking.score, checks.filter((check) => check.status === "warn").length, hardFailed ? 1 : 0, false),
       result: this.result,
       events: this.bakedEvents(),
-      imagePose: image,
+      imagePose: smoothedImage.length >= 33 ? smoothedImage : image,
       rawPose: frame.image,
       reference: this.referenceLine(image),
       fps: this.frameTimes.length,
@@ -248,6 +300,7 @@ export class TLSession {
     now: number;
     dt: number;
     current: number | null;
+    raw: number | null;
     velocity: number | null;
     tracking: TrackingStatus;
     setup: ConstraintCheck[];
@@ -255,19 +308,28 @@ export class TLSession {
     metrics: TLMetrics;
     image: Vec[];
     world: Vec[];
+    reading: RotationReading | null;
   }): void {
     if (this.result && (this.state === "COMPLETE" || this.state === "INVALID")) return;
-    const { now, dt, current, velocity, tracking, setup, hardFailed, metrics, image, world } = input;
+    const { now, dt, current, raw, velocity, tracking, setup, hardFailed, metrics, image, world, reading } = input;
     if (!tracking.present) {
       this.state = "SEARCHING";
-      if (this.weakFor > this.config.trackingResetMs) this.movementStarted ? this.finish(false, now, "Tracking was lost before the hold was confirmed.") : this.reset();
+      if (!this.config.romTestMode && this.weakFor > this.config.trackingResetMs) {
+        this.movementStarted ? this.finish(false, now, "Tracking was lost before the hold was confirmed.") : this.reset();
+      }
       return;
     }
     if (!tracking.criticalOk) {
+      if (this.countdownEndsAt != null) {
+        this.countdownEndsAt = null;
+        this.rotateCueAt = null;
+        this.state = "READY";
+        return;
+      }
       if (this.weakFor < this.config.trackingLostMs) return;
       if (this.movementStarted) {
         this.state = "TRACKING_LOST";
-        if (this.weakFor > this.config.trackingResetMs) this.finish(false, now, "Tracking was lost before the hold was confirmed.");
+        if (!this.config.romTestMode && this.weakFor > this.config.trackingResetMs) this.finish(false, now, "Tracking was lost before the hold was confirmed.");
       } else if (this.weakFor > this.config.trackingResetMs) {
         this.baseline = null;
         this.state = "POSITIONING";
@@ -278,27 +340,42 @@ export class TLSession {
       this.calibrate(now, dt, setup, metrics, image, world);
       return;
     }
-    if (!this.movementStarted) {
-      this.state = "READY";
-      this.watchStart(current, velocity, dt, now);
+    if (this.countdownEndsAt != null) {
+      if (now < this.countdownEndsAt) {
+        this.state = "COUNTDOWN";
+        return;
+      }
+      this.beginMeasuring(now);
       return;
     }
-    if (current != null) {
-      if (this.rawPeak == null || current > this.rawPeak) {
-        this.rawPeak = current;
-        this.atRaw = compOf(metrics);
-      }
-      if (!hardFailed && (this.validPeak == null || current > this.validPeak)) {
-        this.validPeak = current;
-        this.atValid = compOf(metrics);
-      }
+    if (!this.movementStarted) {
+      this.state = "READY";
+      return;
     }
-    const nearPeak = current != null && this.rawPeak != null && this.rawPeak - current <= this.config.peakWindowDeg;
+    this.activeFor += dt;
+    this.noteAlgorithms(reading);
+    if (raw != null && (this.rawPeak == null || raw > this.rawPeak)) {
+      this.rawPeak = raw;
+      this.atRaw = compOf(metrics);
+    }
+    if (current != null && (this.filteredPeak == null || current > this.filteredPeak)) this.filteredPeak = current;
+    if (current != null && !hardFailed && (this.validPeak == null || current > this.validPeak)) {
+      this.validPeak = current;
+      this.atValid = compOf(metrics);
+    }
+    if (this.config.romTestMode) {
+      this.state = "MEASURING";
+      this.holdFor = 0;
+      return;
+    }
+    const longEnough = this.activeFor >= this.config.minActiveMs;
+    const farEnough = current != null && current >= this.config.minPeakRomDeg;
+    const nearPeak = current != null && this.filteredPeak != null && this.filteredPeak - current <= this.config.peakWindowDeg;
     const slow = velocity != null && Math.abs(velocity) <= this.config.peakVelocityDegPerSec;
-    const holding = nearPeak && slow && current != null && current >= this.config.minMovementDeg;
+    const holding = longEnough && farEnough && nearPeak && slow;
     if (!holding) {
       this.holdFor = 0;
-      this.state = "ROTATING";
+      this.state = "MEASURING";
       return;
     }
     this.holdFor += dt;
@@ -343,32 +420,44 @@ export class TLSession {
     }
     this.baseline = built;
     this.calib = [];
-    this.state = "READY";
+    this.angleFilter.reset();
+    this.ema = null;
+    this.lastFiltered = null;
+    this.lastAccepted = null;
+    this.lastRom = null;
     this.note("Calibration complete", now);
+    if (this.config.romTestMode) this.beginMeasuring(now);
+    else this.state = "READY";
   }
 
-  private watchStart(current: number | null, velocity: number | null, dt: number, now: number): void {
-    const moving = current != null && velocity != null && current >= this.config.minMovementDeg && velocity >= this.config.minVelocityDegPerSec;
-    this.confirmFrames = moving ? this.confirmFrames + 1 : 0;
-    this.confirmFor = moving ? this.confirmFor + dt : 0;
-    if (this.confirmFrames < this.config.movementConfirmFrames) return;
-    if (this.confirmFor < this.config.movementConfirmMs) return;
+  private beginMeasuring(now: number): void {
+    this.countdownEndsAt = null;
+    this.rotateCueAt = null;
     this.movementStarted = true;
     this.rotationStartedAt = now;
+    this.activeFor = 0;
     this.rawPeak = null;
+    this.filteredPeak = null;
     this.validPeak = null;
     this.atRaw = null;
     this.atValid = null;
     this.holdFor = 0;
     this.peakNoted = false;
-    this.state = "ROTATING";
+    this.algoPeaks = emptyAlgoPeaks();
+    this.angleFilter.reset();
+    this.ema = null;
+    this.lastFiltered = null;
+    this.lastAccepted = null;
+    this.lastRom = null;
+    this.state = "MEASURING";
     this.note("Rotation started", now);
   }
 
-  private finish(accepted: boolean, now: number, why: string): void {
+  private finish(accepted: boolean, now: number, why: string, manual = false): void {
     if (this.result) return;
-    const valid = this.validPeak;
-    const ok = accepted && valid != null && valid >= this.config.minMovementDeg;
+    const valid = this.validPeak ?? this.filteredPeak;
+    const reached = valid != null && valid >= this.config.minPeakRomDeg && this.activeFor >= this.config.minActiveMs;
+    const ok = manual ? valid != null : accepted && reached;
     this.note(ok ? "Hold confirmed" : why, now);
     this.note(ok ? "Assessment complete" : "Assessment stopped", now);
     const failed = [...this.failed];
@@ -415,11 +504,11 @@ export class TLSession {
   private setup(image: Vec[], width: number, height: number, reading: ReturnType<typeof readRotation> | null, metrics: TLMetrics, facing: CameraFacing): ConstraintCheck[] {
     if (this.baseline) return [];
     const upright = maxAbs(metrics.lateralLeanDeg, metrics.forwardLeanDeg);
-    const square = reading?.shoulderVsPelvisDeg == null ? null : Math.abs(reading.shoulderVsPelvisDeg);
+    const square = reading?.legacyDeg == null ? null : Math.abs(reading.legacyDeg);
     return [...setupChecks({ ...blankComp(), facingYawDeg: facing.scoreDeg, uprightDeg: upright, squareDeg: square, lateralLeanDeg: metrics.lateralLeanDeg, forwardLeanDeg: metrics.forwardLeanDeg }, this.config, facing), ...framingChecks(image, width, height)];
   }
 
-  private metrics(world: Vec[], reading: ReturnType<typeof readRotation> | null, velocity: number | null, tracking: TrackingStatus): TLMetrics {
+  private metrics(world: Vec[], image: Vec[], reading: ReturnType<typeof readRotation> | null, velocity: number | null, tracking: TrackingStatus): TLMetrics {
     if (!reading || world.length < 33) return { ...EMPTY_METRICS, present: tracking.present };
     const signs = this.baseline?.signs ?? detectSigns(world);
     const lean = signs ? leanDegrees(world, signs) : { lateral: null, forward: null, tilt: null };
@@ -439,10 +528,10 @@ export class TLSession {
       pelvisYawDeg: reading.pelvisYawDeg,
       headYawDeg: reading.headYawDeg,
       algorithms: {
-        shoulderNeutral: directionalRom(reading.shoulderNeutralDeg, this.direction),
-        shoulderVsPelvis: directionalRom(reading.shoulderVsPelvisDeg, this.direction),
-        worldTorso: directionalRom(reading.worldTorsoDeg, this.direction),
-        imageDepth: directionalRom(reading.imageDepthDeg, this.direction),
+        legacy: directionalRom(reading.legacyDeg, this.direction),
+        shoulderYaw: directionalRom(reading.shoulderFromNeutralDeg, this.direction),
+        torsoPelvis: directionalRom(reading.torsoPelvisDeg, this.direction),
+        depthWidth: directionalRom(reading.depthWidthDeg, this.direction),
       },
       pelvisRotationDeg: base && reading.pelvisYawDeg != null ? Math.abs(reading.pelvisYawDeg - base.yaws.pelvisYawDeg) : null,
       pelvisTranslationPct: base ? (dist3(hipMid, base.midHip) / hipWidth) * 100 : null,
@@ -464,6 +553,10 @@ export class TLSession {
       hipMid,
       shoulderVector: sub(rightShoulder, leftShoulder),
       pelvisVector: sub(rightHip, leftHip),
+      imageLeftShoulder: imagePoint(image, LM.leftShoulder),
+      imageRightShoulder: imagePoint(image, LM.rightShoulder),
+      imageLeftHip: imagePoint(image, LM.leftHip),
+      imageRightHip: imagePoint(image, LM.rightHip),
     };
   }
 
@@ -601,6 +694,37 @@ export class TLSession {
     }
   }
 
+  private countdownLabel(now: number): string | null {
+    if (this.countdownEndsAt == null || this.rotateCueAt == null || now >= this.countdownEndsAt) return null;
+    if (now >= this.rotateCueAt) return "ROTATE";
+    const third = this.config.countdownMs / 3;
+    const remain = this.rotateCueAt - now;
+    if (third <= 0) return "1";
+    if (remain > third * 2) return "3";
+    if (remain > third) return "2";
+    return "1";
+  }
+
+  private algorithmRows(reading: RotationReading | null): AlgorithmLive[] {
+    return ROTATION_ALGORITHMS.map((id) => ({
+      id,
+      current: this.baseline && reading ? primaryAngle(reading, id) : null,
+      leftPeak: this.movementStarted ? this.algoPeaks[id].left : null,
+      rightPeak: this.movementStarted ? this.algoPeaks[id].right : null,
+    }));
+  }
+
+  private noteAlgorithms(reading: RotationReading | null): void {
+    if (!reading) return;
+    for (const id of ROTATION_ALGORITHMS) {
+      const signed = primaryAngle(reading, id);
+      if (signed == null || !Number.isFinite(signed)) continue;
+      const slot = this.algoPeaks[id];
+      if (signed > 0 && (slot.right == null || signed > slot.right)) slot.right = signed;
+      if (signed < 0 && (slot.left == null || -signed > slot.left)) slot.left = -signed;
+    }
+  }
+
   private explain(setup: ConstraintCheck[], tracking: TrackingStatus, current: number | null): string {
     if (this.state === "SEARCHING" || !tracking.present) return "Waiting for both shoulders and both hips.";
     if (this.state === "TRACKING_LOST" || !tracking.criticalOk) return "Landmarks dropped. Shoulders, hips, and knees must be visible again.";
@@ -610,12 +734,20 @@ export class TLSession {
     }
     if (this.state === "STABLE") return `Hold still. Neutral calibration starts in ${Math.max(0, Math.round(this.config.stableMs - this.stableFor))} ms.`;
     if (this.state === "CALIBRATING") return `Capturing a new neutral. ${this.calib.length}/${this.config.minCalibrationFrames} frames.`;
-    if (this.state === "READY") {
-      const now = current == null ? "no angle yet" : `${current.toFixed(1)}°`;
-      return `Rotation must exceed ${this.config.minMovementDeg}° from this neutral and keep moving. Now ${now}. Start frames ${this.confirmFrames}/${this.config.movementConfirmFrames}.`;
+    if (this.state === "READY") return "Press Start rotation. Positioning and calibration are not recorded as ROM.";
+    if (this.state === "COUNTDOWN") return "Countdown. Peaks, the hold, and trial completion stay off until ROTATE.";
+    if (this.state === "MEASURING") {
+      const angle = current == null ? "no angle yet" : `${current.toFixed(1)}°`;
+      if (this.config.romTestMode) return `Test mode. Angle ${angle}. This trial will not finish on its own.`;
+      if (this.activeFor < this.config.minActiveMs) {
+        return `Measuring ${angle}. Active time ${Math.round(this.activeFor)}/${this.config.minActiveMs} ms. A short pause cannot finish the trial yet.`;
+      }
+      if (current == null || current < this.config.minPeakRomDeg) {
+        return `Measuring ${angle}. Peak completion waits for ${this.config.minPeakRomDeg}°.`;
+      }
+      return `Measuring ${angle}. Hold the end range within ±${this.config.peakWindowDeg}° for ${this.config.holdMs} ms.`;
     }
-    if (this.state === "ROTATING") return "Rotation is being measured. The hold starts only after you slow down near the peak.";
-    if (this.state === "PEAK" || this.state === "HOLD") return `Holding the peak ${Math.round(this.holdFor)}/${this.config.holdMs} ms. Leaving the peak window resets the timer.`;
+    if (this.state === "PEAK" || this.state === "HOLD") return `Holding the peak ${Math.round(this.holdFor)}/${this.config.holdMs} ms. Leaving ±${this.config.peakWindowDeg}° resets the timer.`;
     if (this.state === "COMPLETE") return "Trial stored. Next trial clears this calibration and waits for a new rotation.";
     return this.result?.instruction ?? "Trial stopped.";
   }
@@ -624,8 +756,9 @@ export class TLSession {
     if (this.state === "COMPLETE") return this.result?.accepted ? "Assessment complete. Return to the middle, then start the next trial." : (this.result?.instruction ?? "Assessment stopped.");
     if (this.state === "INVALID") return this.result?.instruction ?? "Assessment stopped.";
     if (this.state === "TRACKING_LOST" || !tracking.present) return "Tracking lost. Sit so both shoulders, both hips, and both knees are visible.";
-    if (this.state === "READY") return "READY — begin rotation. Turn as far as is comfortable. No bouncing. No forced rotation.";
-    if (this.state === "ROTATING") return "Keep the pelvis and knees still. Rotate only as far as is comfortable.";
+    if (this.state === "READY") return this.config.romTestMode ? "READY. Test mode starts measuring on its own and does not finish the trial." : "READY. Press Start rotation when you are set.";
+    if (this.state === "COUNTDOWN") return this.countdownLabel(this.lastT ?? 0) === "ROTATE" ? "ROTATE" : `Get ready. ${this.countdownLabel(this.lastT ?? 0) ?? ""}`;
+    if (this.state === "MEASURING") return "Rotate as far as is comfortable. No bouncing. No forced rotation.";
     if (this.state === "PEAK" || this.state === "HOLD") return "Hold your maximum position until the bar fills.";
     if (this.state === "CALIBRATING") return "Hold the neutral position. Face forward, sit tall, and keep the knees still.";
     if (this.state === "STABLE") return "Hold still. Neutral calibration is about to start.";
@@ -652,7 +785,6 @@ export class TLSession {
 
   private clearAttempt(): void {
     this.calib = [];
-    this.confirmFor = 0;
     this.confirmFrames = 0;
     this.holdFor = 0;
     this.failFor = 0;
@@ -661,6 +793,11 @@ export class TLSession {
     this.atValid = null;
     this.atRaw = null;
     this.movementStarted = false;
+    this.countdownEndsAt = null;
+    this.rotateCueAt = null;
+    this.activeFor = 0;
+    this.algoPeaks = emptyAlgoPeaks();
+    this.filteredPeak = null;
     this.rotationStartedAt = null;
     this.calibStartedAt = null;
     this.eventLog = [];
@@ -712,6 +849,20 @@ function blankComp() {
 function maxAbs(a: number | null, b: number | null): number | null {
   if (a == null && b == null) return null;
   return Math.max(Math.abs(a ?? 0), Math.abs(b ?? 0));
+}
+
+function emptyAlgoPeaks(): Record<RotationAlgorithm, { left: number | null; right: number | null }> {
+  return {
+    legacy: { left: null, right: null },
+    shoulderYaw: { left: null, right: null },
+    torsoPelvis: { left: null, right: null },
+    depthWidth: { left: null, right: null },
+  };
+}
+
+function imagePoint(image: Vec[], index: number): Vec | null {
+  const point = image[index];
+  return point ? point : null;
 }
 
 function copyVec(point: Vec): Vec {

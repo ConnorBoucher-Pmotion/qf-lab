@@ -9,7 +9,8 @@ export type TLStateName =
   | "STABLE"
   | "CALIBRATING"
   | "READY"
-  | "ROTATING"
+  | "COUNTDOWN"
+  | "MEASURING"
   | "PEAK"
   | "HOLD"
   | "TRACKING_LOST"
@@ -101,11 +102,28 @@ export type TLTrial = TLResult & {
   recording?: TrialRecording | null;
 };
 
+export type AlgorithmLive = {
+  id: RotationAlgorithm;
+  /** Signed degrees from neutral. Positive is the subject's right. Updates before the trial starts. */
+  current: number | null;
+  leftPeak: number | null;
+  rightPeak: number | null;
+};
+
 export type TLSnapshot = {
   state: TLStateName;
   instruction: string;
   direction: RotationDirection;
   algorithm: RotationAlgorithm;
+  /** "3", "2", "1", or "ROTATE" while the start countdown is running. */
+  countdownLabel: string | null;
+  algorithmsLive: AlgorithmLive[];
+  neutralShoulderYawDeg: number | null;
+  neutralPelvisYawDeg: number | null;
+  shoulderSpanRatio: number | null;
+  imageWidthDeg: number | null;
+  imageShoulderYawDeg: number | null;
+  romTestMode: boolean;
   metrics: TLMetrics;
   tracking: TrackingStatus;
   setupChecks: ConstraintCheck[];
@@ -115,12 +133,16 @@ export type TLSnapshot = {
   rom: {
     /** Live rotation from the calibrated neutral. Updates whenever landmarks are present. Not a trial result. */
     current: number | null;
+    /** Selected algorithm, spike-gated landmarks, no angle smoothing. */
     raw: number | null;
+    /** Same angle after the landmark smoother, before the angle smoother. */
+    landmarkSmoothed: number | null;
     filtered: number | null;
-    /** Trial ROM. Empty until a real rotation has started. */
+    /** Trial ROM. Empty until ROTATE. */
     active: number | null;
     validPeak: number | null;
     rawPeak: number | null;
+    filteredPeak: number | null;
   };
   holdProgress: number;
   calibrationProgress: number;
@@ -175,4 +197,8 @@ export type TLMetrics = {
   hipMid: Vec | null;
   shoulderVector: { x: number; y: number; z: number } | null;
   pelvisVector: { x: number; y: number; z: number } | null;
+  imageLeftShoulder: Vec | null;
+  imageRightShoulder: Vec | null;
+  imageLeftHip: Vec | null;
+  imageRightHip: Vec | null;
 };

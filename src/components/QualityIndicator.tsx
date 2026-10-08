@@ -4,12 +4,12 @@ export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) 
   const state = snapshot?.state ?? "SEARCHING";
   const meter = state === "CALIBRATING" || state === "STABLE" ? (snapshot?.calibrationProgress ?? 0) : state === "PEAK" || state === "HOLD" ? (snapshot?.holdProgress ?? 0) : 0;
   const direction = snapshot?.direction === "left" ? "Left rotation" : "Right rotation";
-  const live = snapshot?.rom.filtered;
+  const live = snapshot?.countdownLabel ?? (snapshot?.rom.filtered != null ? snapshot.rom.filtered.toFixed(1) : null);
   return (
     <section className="live-rom">
       <p className="kicker">TL Junction · {direction}</p>
-      <p className="angle">{live != null ? live.toFixed(1) : "—.—"}</p>
-      <p className="angle-unit">{snapshot?.calibrationComplete ? "live rotation from neutral, degrees" : "live rotation, degrees"}</p>
+      <p className="angle">{live ?? "—.—"}</p>
+      <p className="angle-unit">{snapshot?.countdownLabel ? "countdown" : snapshot?.calibrationComplete ? "filtered rotation from neutral, degrees" : "live rotation, degrees"}</p>
       <div className="meter" aria-hidden="true">
         <span style={{ width: `${Math.round(meter * 100)}%` }} />
       </div>
@@ -23,12 +23,24 @@ export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) 
           <dd>{fmt(snapshot?.rom.active)}</dd>
         </div>
         <div>
-          <dt>Valid peak</dt>
-          <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.validPeak : null)}</dd>
+          <dt>Raw ROM</dt>
+          <dd>{fmt(snapshot?.rom.raw)}</dd>
+        </div>
+        <div>
+          <dt>Filtered ROM</dt>
+          <dd>{fmt(snapshot?.rom.filtered)}</dd>
         </div>
         <div>
           <dt>Raw peak</dt>
           <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.rawPeak : null)}</dd>
+        </div>
+        <div>
+          <dt>Filtered peak</dt>
+          <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.filteredPeak : null)}</dd>
+        </div>
+        <div>
+          <dt>Valid peak</dt>
+          <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.validPeak : null)}</dd>
         </div>
         <div>
           <dt>Tracking</dt>
