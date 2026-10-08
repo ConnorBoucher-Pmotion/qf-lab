@@ -1,5 +1,5 @@
 import type { Vec } from "../pose/types";
-import type { RotationAlgorithm } from "./tlRotation";
+import type { CameraFacing, RotationAlgorithm } from "./tlRotation";
 
 export type RotationDirection = "left" | "right";
 
@@ -110,6 +110,8 @@ export type TLSnapshot = {
   tracking: TrackingStatus;
   setupChecks: ConstraintCheck[];
   checks: ConstraintCheck[];
+  /** Live values behind the Face the camera check. Not a clinical measurement. */
+  cameraFacing: CameraFacing;
   rom: { current: number | null; raw: number | null; filtered: number | null; validPeak: number | null; rawPeak: number | null };
   holdProgress: number;
   calibrationProgress: number;

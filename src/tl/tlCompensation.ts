@@ -1,4 +1,5 @@
 import type { TLConfig } from "./tlConfig";
+import type { CameraFacing } from "./tlRotation";
 import type { CheckStatus, ConstraintCheck } from "./tlTypes";
 
 export function grade(value: number | null, warn: number, fail: number): CheckStatus {
@@ -23,12 +24,34 @@ export type CompInput = {
   squareDeg: number | null;
 };
 
-export function setupChecks(input: CompInput, config: TLConfig): ConstraintCheck[] {
+export function setupChecks(input: CompInput, config: TLConfig, facing: CameraFacing): ConstraintCheck[] {
   return [
     check("upright", "Sit tall", "setup", input.uprightDeg, config.setupLeanWarnDeg, config.setupLeanFailDeg, "°", true),
-    check("facing", "Face the camera", "setup", input.facingYawDeg, config.setupFacingWarnDeg, config.setupFacingFailDeg, "°", true),
+    facingConstraint(facing, config),
     check("square", "Shoulders square to pelvis", "setup", input.squareDeg, config.neutralYawToleranceDeg, config.neutralYawToleranceDeg + 6, "°", true),
   ];
+}
+
+function facingConstraint(facing: CameraFacing, config: TLConfig): ConstraintCheck {
+  const warn = config.setupFacingWarnDeg;
+  const fail = config.setupFacingFailDeg;
+  const value = facing.scoreDeg;
+  const status = grade(value, warn, fail);
+  const shown = value == null ? "unavailable" : `${value.toFixed(1)}°`;
+  const bypass = config.bypassFaceCamera ? " Bypass is on, so this does not stop calibration." : "";
+  const line = status === "fail" ? `past the ${fail}° fail line` : status === "warn" ? `past the ${warn}° warning` : status === "na" ? "not measurable" : `inside the ${warn}° pass line`;
+  return {
+    id: "facing",
+    label: "Face the camera",
+    category: "setup",
+    value,
+    warn,
+    fail,
+    unit: "°",
+    status,
+    blocking: !config.bypassFaceCamera,
+    message: `${shown} is ${line}. Pass below ${warn}°. Fail at ${fail}°. ${facing.reason}${bypass}`,
+  };
 }
 
 export function trialChecks(input: CompInput, config: TLConfig): ConstraintCheck[] {

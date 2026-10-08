@@ -1,7 +1,8 @@
 import { grade } from "../src/tl/tlCompensation";
 import { TL_CONFIG, normalizeConfig } from "../src/tl/tlConfig";
 import { TLSession } from "../src/tl/tlStateMachine";
-import { captureYaws, detectSigns, leanDegrees, readRotation, syntheticSeated } from "../src/tl/tlRotation";
+import { captureYaws, cameraFacing, detectSigns, leanDegrees, readRotation, subjectYawDeg, syntheticSeated } from "../src/tl/tlRotation";
+import { LM } from "../src/pose/types";
 
 const near = (value: number | null, expected: number, tolerance: number, label: string) => {
   if (value == null || Math.abs(value - expected) > tolerance) {
@@ -110,6 +111,45 @@ t = feed(left, syntheticSeated(), 40, 0);
 t = feed(left, syntheticSeated({ shoulderYawDeg: -30, pelvisYawDeg: 0 }), 16, t);
 const leftSnap = left.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: -30 }) }, t);
 if ((leftSnap.rom.current ?? 0) < 20) throw new Error(`left rotation did not read positive for the subject: ${leftSnap.rom.current}`);
+
+/** Real MediaPipe puts the subject's left landmarks at +x. The old signed hip yaw then wraps to ~180°. */
+function mirrorWorld(pose: ReturnType<typeof syntheticSeated>): ReturnType<typeof syntheticSeated> {
+  return { image: pose.image, world: pose.world.map((point) => ({ ...point, x: -point.x })) };
+}
+const frontalCamera = mirrorWorld(syntheticSeated());
+const oldHipYaw = subjectYawDeg(frontalCamera.world[LM.leftHip], frontalCamera.world[LM.rightHip], 1);
+if (oldHipYaw == null || Math.abs(Math.abs(oldHipYaw) - 180) > 8) throw new Error(`old face-camera yaw should wrap near 180° on a frontal pose, got ${oldHipYaw}`);
+near(cameraFacing(frontalCamera.world).scoreDeg, 0, 2, "frontal facing score");
+
+const facingOf = (yaw: number) => {
+  const session = new TLSession(fast, "right");
+  return session.push({ width: 1280, height: 720, ...mirrorWorld(syntheticSeated({ shoulderYawDeg: yaw, pelvisYawDeg: yaw })) }, 0).cameraFacing;
+};
+if (facingOf(0).status !== "pass") throw new Error(`frontal status ${facingOf(0).status} score ${facingOf(0).scoreDeg}`);
+if (facingOf(8).status !== "pass") throw new Error(`8° should stay a pass, got ${facingOf(8).status} (${facingOf(8).scoreDeg})`);
+near(facingOf(8).scoreDeg, 8, 2, "8° facing score");
+if (facingOf(15).status !== "warn") throw new Error(`15° should warn, got ${facingOf(15).status} (${facingOf(15).scoreDeg})`);
+if (facingOf(70).status !== "fail") throw new Error(`70° should fail, got ${facingOf(70).status} (${facingOf(70).scoreDeg})`);
+
+const frontalSession = new TLSession(fast, "right");
+let tf = feed(frontalSession, frontalCamera, 40, 0);
+const frontalReady = frontalSession.push({ width: 1280, height: 720, ...frontalCamera }, tf);
+if (frontalReady.state !== "READY") {
+  const blocking = frontalReady.setupChecks.filter((check) => check.blocking && (check.status === "fail" || check.status === "na")).map((check) => check.id);
+  throw new Error(`frontal pose did not reach READY (${frontalReady.state}): ${blocking.join(", ")}`);
+}
+
+const sidePose = mirrorWorld(syntheticSeated({ shoulderYawDeg: 70, pelvisYawDeg: 70 }));
+const sideSession = new TLSession(fast, "right");
+feed(sideSession, sidePose, 40, 0);
+const sideStuck = sideSession.push({ width: 1280, height: 720, ...sidePose }, 2000);
+if (sideStuck.state !== "POSITIONING") throw new Error(`side-on pose advanced to ${sideStuck.state}`);
+
+const bypassSession = new TLSession(normalizeConfig({ ...fast, bypassFaceCamera: true }), "right");
+feed(bypassSession, sidePose, 40, 0);
+const bypassReady = bypassSession.push({ width: 1280, height: 720, ...sidePose }, 2000);
+if (bypassReady.cameraFacing.status !== "fail") throw new Error("bypass hid the failure");
+if (bypassReady.state !== "READY") throw new Error(`bypass did not allow calibration (${bypassReady.state})`);
 
 console.log("TL math checks passed");
 console.log({

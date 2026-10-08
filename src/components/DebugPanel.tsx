@@ -61,6 +61,12 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Velocity" value={metrics?.velocityDegPerSec == null ? "—" : `${metrics.velocityDegPerSec.toFixed(1)} °/s`} />
               <Item label="Shoulder yaw" value={deg(metrics?.shoulderYawDeg)} />
               <Item label="Pelvis yaw" value={deg(metrics?.pelvisYawDeg)} />
+              <Item label="Face camera score" value={deg(snapshot?.cameraFacing.scoreDeg)} />
+              <Item label="Face camera status" value={snapshot?.cameraFacing.status ?? "—"} />
+              <Item label="Shoulder axis off camera" value={deg(snapshot?.cameraFacing.shoulderYawDeg)} />
+              <Item label="Hip axis off camera" value={deg(snapshot?.cameraFacing.hipYawDeg)} />
+              <Item label="Shoulder Z difference" value={num(snapshot?.cameraFacing.shoulderZDiff)} />
+              <Item label="Hip Z difference" value={num(snapshot?.cameraFacing.hipZDiff)} />
               <Item label="Head yaw" value={deg(metrics?.headYawDeg)} />
               <Item label="A shoulder vs neutral" value={deg(metrics?.algorithms.shoulderNeutral)} />
               <Item label="B shoulder vs pelvis" value={deg(metrics?.algorithms.shoulderVsPelvis)} />
@@ -149,6 +155,18 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
 }
 
 function Field({ field, config, onChange }: { field: ConfigField; config: TLConfig; onChange: (config: TLConfig) => void }) {
+  if (field.kind === "toggle") {
+    return (
+      <label className="slider">
+        <span>{field.label}</span>
+        <input
+          type="checkbox"
+          checked={config[field.key]}
+          onChange={(event) => onChange(normalizeConfig({ ...config, [field.key]: event.target.checked }))}
+        />
+      </label>
+    );
+  }
   if (field.kind === "select") {
     return (
       <label className="slider">

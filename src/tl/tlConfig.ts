@@ -49,6 +49,10 @@ export type TLConfig = {
   setupLeanFailDeg: number;
   setupFacingWarnDeg: number;
   setupFacingFailDeg: number;
+  /** When true, Face the camera is still shown but does not block calibration. */
+  bypassFaceCamera: boolean;
+  /** Internal. Stops the one-time 12°/25° → 10°/20° default migration from repeating. */
+  facingThresholdVersion: number;
   hardFailPersistMs: number;
 };
 
@@ -93,8 +97,10 @@ export const TL_CONFIG: TLConfig = {
   hipShiftFailPct: 10,
   setupLeanWarnDeg: 8,
   setupLeanFailDeg: 16,
-  setupFacingWarnDeg: 12,
-  setupFacingFailDeg: 25,
+  setupFacingWarnDeg: 10,
+  setupFacingFailDeg: 20,
+  bypassFaceCamera: false,
+  facingThresholdVersion: 2,
   hardFailPersistMs: 300,
 };
 
@@ -119,7 +125,14 @@ export type SelectField = {
   options: Array<{ value: string; label: string }>;
 };
 
-export type ConfigField = RangeField | SelectField;
+export type ToggleField = {
+  kind: "toggle";
+  key: "bypassFaceCamera";
+  label: string;
+  group: ConfigGroup;
+};
+
+export type ConfigField = RangeField | SelectField | ToggleField;
 
 const r = (
   key: RangeField["key"],
@@ -200,8 +213,9 @@ export const TL_CONFIG_FIELDS: ConfigField[] = [
   r("hipShiftFailPct", "Individual hip movement failure", "Lower body", 4, 35, 0.5, "% of hip width"),
   r("setupLeanWarnDeg", "Upright warning", "Setup", 3, 25, 0.5, "deg"),
   r("setupLeanFailDeg", "Upright failure", "Setup", 6, 40, 0.5, "deg"),
-  r("setupFacingWarnDeg", "Facing camera warning", "Setup", 5, 40, 1, "deg"),
-  r("setupFacingFailDeg", "Facing camera failure", "Setup", 10, 60, 1, "deg"),
+  r("setupFacingWarnDeg", "Facing camera warning threshold", "Setup", 5, 40, 1, "deg"),
+  r("setupFacingFailDeg", "Facing camera failure threshold", "Setup", 10, 60, 1, "deg"),
+  { kind: "toggle", key: "bypassFaceCamera", label: "Bypass Face Camera constraint", group: "Setup" },
   r("hardFailPersistMs", "Compensation must last before it counts", "Setup", 0, 1000, 50, "ms"),
 ];
 
@@ -214,9 +228,15 @@ export function normalizeConfig(input: unknown): TLConfig {
     const value = source[field.key];
     if (field.kind === "range") {
       if (typeof value === "number" && Number.isFinite(value)) out[field.key] = Math.max(field.min, Math.min(field.max, value));
+    } else if (field.kind === "toggle") {
+      if (typeof value === "boolean") out[field.key] = value;
     } else if (typeof value === "string" && field.options.some((option) => option.value === value)) {
       (out as Record<string, unknown>)[field.key] = value;
     }
+  }
+  if (source.facingThresholdVersion !== 2 && out.setupFacingWarnDeg === 12 && out.setupFacingFailDeg === 25) {
+    out.setupFacingWarnDeg = 10;
+    out.setupFacingFailDeg = 20;
   }
   return out;
 }

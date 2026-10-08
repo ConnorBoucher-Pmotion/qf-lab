@@ -194,7 +194,7 @@ h1, h2 { font-size: 1rem; margin: 0; font-weight: 650; white-space: nowrap; }
   border: 1px solid #243140;
   border-radius: 12px;
   padding: 0.5rem 0.65rem;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .checklist {
@@ -216,7 +216,9 @@ h1, h2 { font-size: 1rem; margin: 0; font-weight: 650; white-space: nowrap; }
 }
 
 .checklist .mark { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; }
-.checklist small { display: block; color: #9aabbd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.checklist small { display: block; color: #9aabbd; white-space: normal; }
+.facing-readout { margin-top: 0.55rem; font-size: 0.72rem; }
+.facing-reason { grid-column: 1 / -1; margin: 0.35rem 0 0; color: #9aabbd; }
 
 .st-pass { color: #b6f5cf; }
 .st-warn { color: #ffe3a0; }

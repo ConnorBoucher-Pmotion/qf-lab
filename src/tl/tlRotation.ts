@@ -86,6 +86,114 @@ export function subjectYawDeg(left: V3, right: V3, zFront: number): number | nul
   return (-Math.atan2(dz, dx) * 180) / Math.PI;
 }
 
+/**
+ * How far a left-right body axis is turned away from the camera.
+ * 0° is across the frame (facing the camera). 90° points at the camera (side-on).
+ *
+ * This is not subjectYawDeg. That signed angle is ~180° for a real frontal
+ * MediaPipe pose, because the subject's left landmark sits at +x, so
+ * right.x - left.x is negative and atan2 wraps. Taking the absolute value
+ * then fails "Face the camera" for someone sitting square to the lens.
+ * Using the absolute depth against the absolute width removes that wrap
+ * and ignores which side is +x or +z.
+ */
+export function axisOffCameraDeg(left: V3, right: V3): number | null {
+  const dx = Math.abs(right.x - left.x);
+  const dz = Math.abs(right.z - left.z);
+  if (dx + dz < 1e-5) return null;
+  return (Math.atan2(dz, dx) * 180) / Math.PI;
+}
+
+export type CameraFacing = {
+  scoreDeg: number | null;
+  shoulderYawDeg: number | null;
+  hipYawDeg: number | null;
+  leftShoulderZ: number | null;
+  rightShoulderZ: number | null;
+  shoulderZDiff: number | null;
+  leftHipZ: number | null;
+  rightHipZ: number | null;
+  hipZDiff: number | null;
+  shoulderWidth: number | null;
+  hipWidth: number | null;
+  /** Shoulder midpoint minus hip midpoint, in hip widths. Sideways offset, not yaw. */
+  shoulderOverHip: number | null;
+  status: "pass" | "warn" | "fail" | "na";
+  warnDeg: number;
+  failDeg: number;
+  reason: string;
+};
+
+const EMPTY_FACING: CameraFacing = {
+  scoreDeg: null,
+  shoulderYawDeg: null,
+  hipYawDeg: null,
+  leftShoulderZ: null,
+  rightShoulderZ: null,
+  shoulderZDiff: null,
+  leftHipZ: null,
+  rightHipZ: null,
+  hipZDiff: null,
+  shoulderWidth: null,
+  hipWidth: null,
+  shoulderOverHip: null,
+  status: "na",
+  warnDeg: 10,
+  failDeg: 20,
+  reason: "No pose yet.",
+};
+
+/** Facing score from both the shoulder axis and the hip axis. 0° is frontal. */
+export function cameraFacing(world: Vec[]): CameraFacing {
+  if (world.length < 33) return EMPTY_FACING;
+  const leftShoulder = world[LM.leftShoulder];
+  const rightShoulder = world[LM.rightShoulder];
+  const leftHip = world[LM.leftHip];
+  const rightHip = world[LM.rightHip];
+  const seen = (point: Vec | undefined) => (point?.visibility ?? 0) >= 0.2;
+  const shoulderYawDeg = seen(leftShoulder) && seen(rightShoulder) ? axisOffCameraDeg(leftShoulder, rightShoulder) : null;
+  const hipYawDeg = seen(leftHip) && seen(rightHip) ? axisOffCameraDeg(leftHip, rightHip) : null;
+  const shoulderWidth = seen(leftShoulder) && seen(rightShoulder) ? Math.hypot(rightShoulder.x - leftShoulder.x, rightShoulder.y - leftShoulder.y, rightShoulder.z - leftShoulder.z) : null;
+  const hipWidth = seen(leftHip) && seen(rightHip) ? Math.hypot(rightHip.x - leftHip.x, rightHip.y - leftHip.y, rightHip.z - leftHip.z) : null;
+  const hipMidX = ((leftHip?.x ?? 0) + (rightHip?.x ?? 0)) / 2;
+  const shoulderMidX = ((leftShoulder?.x ?? 0) + (rightShoulder?.x ?? 0)) / 2;
+  const shoulderOverHip = hipWidth != null && hipWidth > 1e-5 ? (shoulderMidX - hipMidX) / hipWidth : null;
+  let scoreDeg: number | null = null;
+  let reason = "Both shoulders and both hips need to be visible.";
+  if (shoulderYawDeg != null && hipYawDeg != null) {
+    scoreDeg = (shoulderYawDeg + hipYawDeg) / 2;
+    const worse = hipYawDeg >= shoulderYawDeg ? "hips" : "shoulders";
+    reason = `Average of the hip axis (${hipYawDeg.toFixed(1)}°) and the shoulder axis (${shoulderYawDeg.toFixed(1)}°) off a frontal line. The ${worse} are turned farther.`;
+  } else if (hipYawDeg != null) {
+    scoreDeg = hipYawDeg;
+    reason = "Shoulder axis is not visible. Score is the hip axis only.";
+  } else if (shoulderYawDeg != null) {
+    scoreDeg = shoulderYawDeg;
+    reason = "Hip axis is not visible. Score is the shoulder axis only.";
+  }
+  if (shoulderOverHip != null && Math.abs(shoulderOverHip) > 0.45) {
+    reason += ` Shoulder midpoint is ${(Math.abs(shoulderOverHip) * 100).toFixed(0)}% of hip width off the pelvis.`;
+  }
+  return {
+    scoreDeg,
+    shoulderYawDeg,
+    hipYawDeg,
+    leftShoulderZ: leftShoulder?.z ?? null,
+    rightShoulderZ: rightShoulder?.z ?? null,
+    shoulderZDiff: leftShoulder && rightShoulder ? rightShoulder.z - leftShoulder.z : null,
+    leftHipZ: leftHip?.z ?? null,
+    rightHipZ: rightHip?.z ?? null,
+    hipZDiff: leftHip && rightHip ? rightHip.z - leftHip.z : null,
+    shoulderWidth,
+    hipWidth,
+    shoulderOverHip,
+    status: "na",
+    warnDeg: 10,
+    failDeg: 20,
+    reason,
+  };
+}
+
 export function readRotation(world: Vec[], image: Vec[], baseline: YawBaseline | null): RotationReading {
   const empty = emptyReading();
   if (world.length < 33) return empty;

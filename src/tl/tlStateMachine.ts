@@ -2,10 +2,11 @@ import { dist3, median, midpoint, stdev } from "../pose/coordinateNormalization"
 import { PoseFilter } from "../pose/landmarkFiltering";
 import { OneEuroFilter } from "../pose/oneEuro";
 import { LM, type Vec } from "../pose/types";
-import { setupChecks, trialChecks } from "./tlCompensation";
+import { setupChecks, trialChecks, grade } from "./tlCompensation";
 import { CAMERA_NOTE, type TLConfig } from "./tlConfig";
 import { trackingConfidence } from "./tlQuality";
 import {
+  cameraFacing,
   captureYaws,
   detectSigns,
   directionalRom,
@@ -14,6 +15,7 @@ import {
   primaryAngle,
   readRotation,
   sub,
+  type CameraFacing,
   type FrameSigns,
   type V3,
   type YawBaseline,
@@ -176,7 +178,14 @@ export class TLSession {
     const current = directionalRom(smoothed.filtered, this.direction);
     const velocity = this.velocity(current, dt);
     const metrics = this.metrics(world, reading, velocity, tracking);
-    const setup = this.setup(image, frame.width, frame.height, reading, metrics);
+    const measured = cameraFacing(world);
+    const facing: CameraFacing = {
+      ...measured,
+      warnDeg: this.config.setupFacingWarnDeg,
+      failDeg: this.config.setupFacingFailDeg,
+      status: grade(measured.scoreDeg, this.config.setupFacingWarnDeg, this.config.setupFacingFailDeg),
+    };
+    const setup = this.setup(image, frame.width, frame.height, reading, metrics, facing);
     const checks = this.baseline ? trialChecks(this.compInput(metrics), this.config) : [];
     this.observeChecks(checks, now);
     const hardNow = checks.some((check) => check.category === "hard" && check.status === "fail");
@@ -193,6 +202,7 @@ export class TLSession {
       tracking,
       setupChecks: setup,
       checks,
+      cameraFacing: facing,
       rom: {
         current,
         raw: smoothed.raw == null ? null : directionalRom(smoothed.raw, this.direction),
@@ -376,12 +386,11 @@ export class TLSession {
     this.state = ok ? "COMPLETE" : "INVALID";
   }
 
-  private setup(image: Vec[], width: number, height: number, reading: ReturnType<typeof readRotation> | null, metrics: TLMetrics): ConstraintCheck[] {
+  private setup(image: Vec[], width: number, height: number, reading: ReturnType<typeof readRotation> | null, metrics: TLMetrics, facing: CameraFacing): ConstraintCheck[] {
     if (this.baseline) return [];
     const upright = maxAbs(metrics.lateralLeanDeg, metrics.forwardLeanDeg);
-    const facing = reading?.pelvisYawDeg == null ? null : Math.abs(reading.pelvisYawDeg);
     const square = reading?.shoulderVsPelvisDeg == null ? null : Math.abs(reading.shoulderVsPelvisDeg);
-    return [...setupChecks({ ...blankComp(), facingYawDeg: facing, uprightDeg: upright, squareDeg: square, lateralLeanDeg: metrics.lateralLeanDeg, forwardLeanDeg: metrics.forwardLeanDeg }, this.config), ...framingChecks(image, width, height)];
+    return [...setupChecks({ ...blankComp(), facingYawDeg: facing.scoreDeg, uprightDeg: upright, squareDeg: square, lateralLeanDeg: metrics.lateralLeanDeg, forwardLeanDeg: metrics.forwardLeanDeg }, this.config, facing), ...framingChecks(image, width, height)];
   }
 
   private metrics(world: Vec[], reading: ReturnType<typeof readRotation> | null, velocity: number | null, tracking: TrackingStatus): TLMetrics {
