@@ -151,6 +151,44 @@ const bypassReady = bypassSession.push({ width: 1280, height: 720, ...sidePose }
 if (bypassReady.cameraFacing.status !== "fail") throw new Error("bypass hid the failure");
 if (bypassReady.state !== "READY") throw new Error(`bypass did not allow calibration (${bypassReady.state})`);
 
+const life = new TLSession(normalizeConfig({ ...fast, movementConfirmFrames: 2 }), "right");
+const roms: number[] = [];
+const ids: string[] = [];
+let clock = 0;
+for (const peak of [28, 16, 34]) {
+  clock = feed(life, syntheticSeated(), 40, clock);
+  const armed = life.push({ width: 1280, height: 720, ...syntheticSeated() }, clock);
+  if (armed.state !== "READY" || armed.movementStarted || armed.rom.active != null || armed.rom.validPeak != null) {
+    throw new Error(`trial ${roms.length + 1} was not armed cleanly (${armed.state}, active ${armed.rom.active}, peak ${armed.rom.validPeak})`);
+  }
+  clock += 33;
+  const wobble = life.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 3 }) }, clock);
+  if (wobble.movementStarted || wobble.state !== "READY") throw new Error(`a 3° settle started trial ${roms.length + 1}`);
+  for (let step = 1; step <= 36; step += 1) clock = feed(life, syntheticSeated({ shoulderYawDeg: (peak * step) / 36 }), 1, clock);
+  clock = feed(life, syntheticSeated({ shoulderYawDeg: peak }), 24, clock);
+  const finished = life.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: peak }) }, clock);
+  if (finished.state !== "COMPLETE" || finished.result?.measuredRom == null) throw new Error(`trial ${roms.length + 1} did not complete (${finished.state})`);
+  roms.push(finished.result.measuredRom);
+  ids.push(finished.result.id);
+  life.nextTrial();
+  const cleared = life.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: peak }) }, clock + 33);
+  if (cleared.baselineReady || cleared.movementStarted || cleared.rom.active != null) {
+    throw new Error(`next trial kept trial ${roms.length} state (${cleared.state})`);
+  }
+  clock += 66;
+}
+if (new Set(ids).size !== 3) throw new Error("trial ids were reused");
+if (Math.abs(roms[0] - roms[1]) < 5 || Math.abs(roms[1] - roms[2]) < 5) throw new Error(`trials did not keep separate ROM ${roms.join(", ")}`);
+
+const redo = new TLSession(normalizeConfig({ ...fast, movementConfirmFrames: 2 }), "right");
+clock = feed(redo, syntheticSeated(), 40, 0);
+clock = feed(redo, syntheticSeated({ shoulderYawDeg: 20 }), 8, clock);
+const mid = redo.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 20 }) }, clock);
+if (!mid.movementStarted) throw new Error("reset test never started");
+redo.reset();
+const again = redo.push({ width: 1280, height: 720, ...syntheticSeated() }, clock + 33);
+if (again.movementStarted || again.baselineReady || again.rom.validPeak != null) throw new Error("reset current trial kept the attempt");
+
 console.log("TL math checks passed");
 console.log({
   relative: relative.shoulderVsPelvisDeg?.toFixed(1),

@@ -92,6 +92,7 @@ export class TLSession {
   private calibStart = 0;
   private stableFor = 0;
   private confirmFor = 0;
+  private confirmFrames = 0;
   private holdFor = 0;
   private failFor = 0;
   private weakFor = 0;
@@ -109,6 +110,7 @@ export class TLSession {
   private warned = new Set<string>();
   private failed = new Set<string>();
   private peakNoted = false;
+  private blockedBy = "Waiting for a pose.";
   private stillYaws: number[] = [];
   private stillHips: V3[] = [];
   private frameTimes: number[] = [];
@@ -136,31 +138,36 @@ export class TLSession {
   }
 
   reset(): void {
+    this.initializeNewTrial();
+    this.weakFor = 0;
+    this.lastT = null;
+    this.frameTimes = [];
+    this.state = "SEARCHING";
+  }
+
+  /** Discard the unfinished attempt and capture a new neutral. Stored results stay in the trial list. */
+  nextTrial(): void {
+    this.initializeNewTrial();
+    this.state = "POSITIONING";
+  }
+
+  /**
+   * Clears every temporary measurement: baseline, peaks, hold, filters, and the
+   * movement gate. Does not touch the saved trial list.
+   */
+  private initializeNewTrial(): void {
     this.poseFilter.reset();
     this.angleFilter.reset();
     this.ema = null;
     this.lastFiltered = null;
     this.lastAccepted = null;
     this.outlierRun = 0;
-    this.state = "SEARCHING";
     this.baseline = null;
-    this.clearAttempt();
     this.stableFor = 0;
-    this.weakFor = 0;
     this.stillYaws = [];
     this.stillHips = [];
     this.lastRom = null;
-    this.lastT = null;
-  }
-
-  nextTrial(): void {
     this.clearAttempt();
-    this.lastRom = null;
-    this.angleFilter.reset();
-    this.ema = null;
-    this.lastFiltered = null;
-    this.lastAccepted = null;
-    this.state = this.baseline ? "READY" : "POSITIONING";
   }
 
   push(frame: { width: number; height: number; image: Vec[]; world: Vec[] }, now: number): TLSnapshot {
@@ -192,6 +199,8 @@ export class TLSession {
     this.failFor = hardNow ? this.failFor + dt : 0;
     const hardFailed = hardNow && this.failFor >= this.config.hardFailPersistMs;
     this.advance({ now, dt, current, velocity, tracking, setup, hardFailed, metrics, image, world });
+    this.blockedBy = this.explain(setup, tracking, current);
+    const measuring = this.state === "ROTATING" || this.state === "PEAK" || this.state === "HOLD" || this.state === "TRACKING_LOST";
 
     return {
       state: this.state,
@@ -207,13 +216,22 @@ export class TLSession {
         current,
         raw: smoothed.raw == null ? null : directionalRom(smoothed.raw, this.direction),
         filtered: current,
-        validPeak: this.validPeak,
-        rawPeak: this.rawPeak,
+        active: !this.movementStarted ? null : this.result ? this.validPeak : current,
+        validPeak: this.movementStarted ? this.validPeak : null,
+        rawPeak: this.movementStarted ? this.rawPeak : null,
       },
-      holdProgress: this.config.holdMs <= 0 ? 0 : Math.max(0, Math.min(1, this.holdFor / this.config.holdMs)),
+      holdProgress: this.movementStarted && this.config.holdMs > 0 ? Math.max(0, Math.min(1, this.holdFor / this.config.holdMs)) : 0,
       calibrationProgress: this.calibrationProgress(now),
       baselineReady: this.baseline != null,
+      calibrationComplete: this.baseline != null,
+      assessmentArmed: this.baseline != null && this.result == null && (this.state === "READY" || measuring),
       movementStarted: this.movementStarted,
+      blockedBy: this.blockedBy,
+      movementStartFrames: this.confirmFrames,
+      movementStartFramesRequired: this.config.movementConfirmFrames,
+      cameraActive: true,
+      poseLoop: "active",
+      lastPoseAt: now,
       hardFailed,
       quality: trackingConfidence(tracking.score, checks.filter((check) => check.status === "warn").length, hardFailed ? 1 : 0, false),
       result: this.result,
@@ -331,10 +349,18 @@ export class TLSession {
 
   private watchStart(current: number | null, velocity: number | null, dt: number, now: number): void {
     const moving = current != null && velocity != null && current >= this.config.minMovementDeg && velocity >= this.config.minVelocityDegPerSec;
+    this.confirmFrames = moving ? this.confirmFrames + 1 : 0;
     this.confirmFor = moving ? this.confirmFor + dt : 0;
+    if (this.confirmFrames < this.config.movementConfirmFrames) return;
     if (this.confirmFor < this.config.movementConfirmMs) return;
     this.movementStarted = true;
     this.rotationStartedAt = now;
+    this.rawPeak = null;
+    this.validPeak = null;
+    this.atRaw = null;
+    this.atValid = null;
+    this.holdFor = 0;
+    this.peakNoted = false;
     this.state = "ROTATING";
     this.note("Rotation started", now);
   }
@@ -575,11 +601,30 @@ export class TLSession {
     }
   }
 
+  private explain(setup: ConstraintCheck[], tracking: TrackingStatus, current: number | null): string {
+    if (this.state === "SEARCHING" || !tracking.present) return "Waiting for both shoulders and both hips.";
+    if (this.state === "TRACKING_LOST" || !tracking.criticalOk) return "Landmarks dropped. Shoulders, hips, and knees must be visible again.";
+    if (this.state === "POSITIONING") {
+      const failed = setup.find((check) => check.blocking && (check.status === "fail" || check.status === "na"));
+      return failed ? failed.message : "Hold still. Neutral calibration has not started.";
+    }
+    if (this.state === "STABLE") return `Hold still. Neutral calibration starts in ${Math.max(0, Math.round(this.config.stableMs - this.stableFor))} ms.`;
+    if (this.state === "CALIBRATING") return `Capturing a new neutral. ${this.calib.length}/${this.config.minCalibrationFrames} frames.`;
+    if (this.state === "READY") {
+      const now = current == null ? "no angle yet" : `${current.toFixed(1)}°`;
+      return `Rotation must exceed ${this.config.minMovementDeg}° from this neutral and keep moving. Now ${now}. Start frames ${this.confirmFrames}/${this.config.movementConfirmFrames}.`;
+    }
+    if (this.state === "ROTATING") return "Rotation is being measured. The hold starts only after you slow down near the peak.";
+    if (this.state === "PEAK" || this.state === "HOLD") return `Holding the peak ${Math.round(this.holdFor)}/${this.config.holdMs} ms. Leaving the peak window resets the timer.`;
+    if (this.state === "COMPLETE") return "Trial stored. Next trial clears this calibration and waits for a new rotation.";
+    return this.result?.instruction ?? "Trial stopped.";
+  }
+
   private instruction(setup: ConstraintCheck[], tracking: TrackingStatus): string {
     if (this.state === "COMPLETE") return this.result?.accepted ? "Assessment complete. Return to the middle, then start the next trial." : (this.result?.instruction ?? "Assessment stopped.");
     if (this.state === "INVALID") return this.result?.instruction ?? "Assessment stopped.";
     if (this.state === "TRACKING_LOST" || !tracking.present) return "Tracking lost. Sit so both shoulders, both hips, and both knees are visible.";
-    if (this.state === "READY") return `Ready. Rotate as far as comfortably possible to your ${this.direction}. No bouncing. No forced rotation.`;
+    if (this.state === "READY") return "READY — begin rotation. Turn as far as is comfortable. No bouncing. No forced rotation.";
     if (this.state === "ROTATING") return "Keep the pelvis and knees still. Rotate only as far as is comfortable.";
     if (this.state === "PEAK" || this.state === "HOLD") return "Hold your maximum position until the bar fills.";
     if (this.state === "CALIBRATING") return "Hold the neutral position. Face forward, sit tall, and keep the knees still.";
@@ -608,6 +653,7 @@ export class TLSession {
   private clearAttempt(): void {
     this.calib = [];
     this.confirmFor = 0;
+    this.confirmFrames = 0;
     this.holdFor = 0;
     this.failFor = 0;
     this.rawPeak = null;

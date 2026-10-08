@@ -102,14 +102,29 @@ h1, h2 { font-size: 1rem; margin: 0; font-weight: 650; white-space: nowrap; }
 .stage-status-idle { opacity: 0.7; }
 
 .instruction-bar {
-  flex: 0 0 64px;
-  height: 64px;
+  flex: 0 0 84px;
+  height: 84px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
   padding: 0 0.9rem;
   border-top: 1px solid #1c2633;
   background: #0c1117;
   overflow: hidden;
+}
+
+.blocked-by {
+  margin: 0.15rem 0 0;
+  color: #9aabbd;
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
+.trial-count {
+  margin: 0;
+  align-self: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .instruction {
@@ -359,7 +374,7 @@ button.primary { background: #d7e6f5; color: #102033; }
 }
 .video-waiting { min-height: 220px; display: flex; align-items: center; justify-content: center; color: #9aabbd; }
 
-.live-rows.tall { grid-template-rows: repeat(5, 1.55rem); }
+.live-rows.tall { grid-template-rows: repeat(6, 1.45rem); }
 .event-list { display: grid; gap: 0.3rem; margin: 0.4rem 0 0.7rem; }
 .event-list button { text-align: left; }
 .protocol { margin: 0.35rem 0; }

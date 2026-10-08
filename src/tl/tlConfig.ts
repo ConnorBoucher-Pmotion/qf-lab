@@ -12,6 +12,8 @@ export type TLConfig = {
   minMovementDeg: number;
   minVelocityDegPerSec: number;
   movementConfirmMs: number;
+  /** Consecutive frames that must stay past the start threshold before ROTATING. */
+  movementConfirmFrames: number;
   stableMs: number;
   calibrationMs: number;
   minCalibrationFrames: number;
@@ -62,6 +64,7 @@ export const TL_CONFIG: TLConfig = {
   minMovementDeg: 8,
   minVelocityDegPerSec: 10,
   movementConfirmMs: 250,
+  movementConfirmFrames: 4,
   stableMs: 600,
   calibrationMs: 1000,
   minCalibrationFrames: 12,
@@ -167,6 +170,7 @@ export const TL_CONFIG_FIELDS: ConfigField[] = [
   r("minMovementDeg", "Minimum rotation to begin", "Measurement", 2, 25, 0.5, "deg"),
   r("minVelocityDegPerSec", "Minimum speed to begin", "Measurement", 1, 40, 1, "deg/s"),
   r("movementConfirmMs", "Movement must last", "Measurement", 50, 800, 50, "ms"),
+  r("movementConfirmFrames", "Movement must last", "Measurement", 1, 15, 1, "frames"),
   r("stableMs", "Neutral stillness before calibration", "Neutral calibration", 200, 2000, 50, "ms"),
   r("calibrationMs", "Neutral calibration duration", "Neutral calibration", 400, 3000, 50, "ms"),
   r("minCalibrationFrames", "Minimum calibration frames", "Neutral calibration", 4, 60, 1, "frames"),

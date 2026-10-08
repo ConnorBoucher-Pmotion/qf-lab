@@ -2,14 +2,14 @@ import type { TLSnapshot } from "../tl/tlTypes";
 
 export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) {
   const state = snapshot?.state ?? "SEARCHING";
-  const show = snapshot != null && ["ROTATING", "PEAK", "HOLD", "TRACKING_LOST", "COMPLETE", "INVALID"].includes(state);
   const meter = state === "CALIBRATING" || state === "STABLE" ? (snapshot?.calibrationProgress ?? 0) : state === "PEAK" || state === "HOLD" ? (snapshot?.holdProgress ?? 0) : 0;
   const direction = snapshot?.direction === "left" ? "Left rotation" : "Right rotation";
+  const live = snapshot?.rom.filtered;
   return (
     <section className="live-rom">
       <p className="kicker">TL Junction · {direction}</p>
-      <p className="angle">{show && snapshot?.rom.filtered != null ? snapshot.rom.filtered.toFixed(1) : "—.—"}</p>
-      <p className="angle-unit">current rotation, degrees</p>
+      <p className="angle">{live != null ? live.toFixed(1) : "—.—"}</p>
+      <p className="angle-unit">{snapshot?.calibrationComplete ? "live rotation from neutral, degrees" : "live rotation, degrees"}</p>
       <div className="meter" aria-hidden="true">
         <span style={{ width: `${Math.round(meter * 100)}%` }} />
       </div>
@@ -19,12 +19,16 @@ export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) 
           <dd className={`pill sev-${toneOf(snapshot)}`}>{state.replace("_", " ")}</dd>
         </div>
         <div>
+          <dt>Active trial ROM</dt>
+          <dd>{fmt(snapshot?.rom.active)}</dd>
+        </div>
+        <div>
           <dt>Valid peak</dt>
-          <dd>{fmt(snapshot?.rom.validPeak)}</dd>
+          <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.validPeak : null)}</dd>
         </div>
         <div>
           <dt>Raw peak</dt>
-          <dd>{fmt(snapshot?.rom.rawPeak)}</dd>
+          <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.rawPeak : null)}</dd>
         </div>
         <div>
           <dt>Tracking</dt>
@@ -35,7 +39,7 @@ export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) 
           <dd>{snapshot ? `${snapshot.quality}%` : "—"}</dd>
         </div>
       </dl>
-      <p className="quality-line">Software tracking confidence, not a clinical score.</p>
+      <p className="quality-line">The live number is not a saved result until rotation has started.</p>
     </section>
   );
 }

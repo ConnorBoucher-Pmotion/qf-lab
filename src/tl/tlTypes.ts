@@ -112,11 +112,31 @@ export type TLSnapshot = {
   checks: ConstraintCheck[];
   /** Live values behind the Face the camera check. Not a clinical measurement. */
   cameraFacing: CameraFacing;
-  rom: { current: number | null; raw: number | null; filtered: number | null; validPeak: number | null; rawPeak: number | null };
+  rom: {
+    /** Live rotation from the calibrated neutral. Updates whenever landmarks are present. Not a trial result. */
+    current: number | null;
+    raw: number | null;
+    filtered: number | null;
+    /** Trial ROM. Empty until a real rotation has started. */
+    active: number | null;
+    validPeak: number | null;
+    rawPeak: number | null;
+  };
   holdProgress: number;
   calibrationProgress: number;
   baselineReady: boolean;
+  /** Neutral baseline exists. Positioning is finished. */
+  calibrationComplete: boolean;
+  /** READY or measuring. Not during positioning or after the trial is stored. */
+  assessmentArmed: boolean;
   movementStarted: boolean;
+  /** Why the state machine is not advancing. */
+  blockedBy: string;
+  movementStartFrames: number;
+  movementStartFramesRequired: number;
+  cameraActive: boolean;
+  poseLoop: "active" | "stopped";
+  lastPoseAt: number | null;
   hardFailed: boolean;
   quality: number;
   result: TLResult | null;

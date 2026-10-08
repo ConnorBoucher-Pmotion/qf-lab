@@ -116,6 +116,7 @@ export function CameraView({ direction, config, resetSignal, nextSignal, preRoll
         }
         session.setConfig(configRef.current);
         const snapshot = session.push({ width: 1280, height: 720, image: pose.image, world: pose.world }, now);
+        snapshot.cameraActive = true;
         drawTlOverlay(ctx, 1280, 720, snapshot, configRef.current);
         publish(snapshot, now);
         try {
@@ -139,6 +140,7 @@ export function CameraView({ direction, config, resetSignal, nextSignal, preRoll
         const world = worldLandmarks(detection.worldLandmarks?.[0], detection.landmarks?.[0]);
         session.setConfig(configRef.current);
         const snapshot = session.push({ width, height, image: image ?? [], world: world ?? [] }, now);
+        snapshot.cameraActive = video.readyState >= 2 && video.srcObject != null;
         drawTlOverlay(ctx, width, height, snapshot, configRef.current);
         publish(snapshot, now);
         try {

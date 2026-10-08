@@ -26,6 +26,7 @@ export function App() {
   const [preRollMs, setPreRollMs] = useState(1500);
   const [postRollMs, setPostRollMs] = useState(1000);
   const [reviewId, setReviewId] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(() => nextAttempt(loadTrials(), loadSeries()));
   const pendingRecording = useRef(new Map<string, TrialRecording>());
 
   const setConfig = (next: TLConfig) => {
@@ -35,6 +36,7 @@ export function App() {
   const setSeries = (next: string) => {
     setSeriesState(next);
     saveSeries(next);
+    setAttempt(nextAttempt(trials, next));
   };
   const commit = (update: (current: TLTrial[]) => TLTrial[]) =>
     setTrials((current) => {
@@ -111,12 +113,20 @@ export function App() {
                 Right rotation
               </button>
             </div>
-            <button type="button" onClick={() => setNextSignal((value) => value + 1)} disabled={!snapshot?.baselineReady}>
+            <button
+              type="button"
+              onClick={() => {
+                setNextSignal((value) => value + 1);
+                setAttempt(nextAttempt(trials, series));
+              }}
+              disabled={!snapshot?.baselineReady && snapshot?.state !== "COMPLETE" && snapshot?.state !== "INVALID"}
+            >
               Next trial
             </button>
             <button type="button" onClick={() => setResetSignal((value) => value + 1)}>
-              Recalibrate
+              Reset current trial
             </button>
+            <p className="trial-count">Trial {attempt}</p>
           </div>
         </header>
         <div className="assessment-grid">
@@ -134,6 +144,7 @@ export function App() {
             />
             <div className="instruction-bar">
               <p className={`instruction tone-${instructionTone(snapshot?.state)}`}>{snapshot?.instruction ?? "Sit facing the camera."}</p>
+              {snapshot?.blockedBy ? <p className="blocked-by">{snapshot.blockedBy}</p> : null}
             </div>
           </div>
           <aside className="live-rail">
@@ -189,6 +200,10 @@ export function App() {
       <TrialVideoDialog trial={review} preRollMs={preRollMs} onClose={() => setReviewId(null)} onDeleted={forgetVideos.bind(null, review ? [review.id] : [])} />
     </div>
   );
+}
+
+function nextAttempt(saved: TLTrial[], seriesName: string): number {
+  return saved.filter((trial) => trial.series === seriesName).reduce((max, trial) => Math.max(max, trial.trialNumber), 0) + 1;
 }
 
 function tone(snapshot: TLSnapshot | null): string {

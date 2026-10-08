@@ -53,6 +53,17 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
             <h3>Live</h3>
             <dl className="readout">
               <Item label="State" value={snapshot?.state ?? "—"} />
+              <Item label="Why it is not advancing" value={snapshot?.blockedBy ?? "—"} />
+              <Item label="Calibration complete" value={yesNo(snapshot?.calibrationComplete)} />
+              <Item label="Assessment armed" value={yesNo(snapshot?.assessmentArmed)} />
+              <Item label="Movement started" value={yesNo(snapshot?.movementStarted)} />
+              <Item label="Active trial tracking" value={yesNo(snapshot?.movementStarted && !snapshot.result && snapshot.state !== "READY")} />
+              <Item label="Movement start threshold" value={snapshot ? `${config.minMovementDeg}°` : "—"} />
+              <Item label="Rotation from neutral" value={deg(snapshot?.rom.filtered)} />
+              <Item label="Movement start frames" value={snapshot ? `${snapshot.movementStartFrames}/${snapshot.movementStartFramesRequired}` : "—"} />
+              <Item label="Camera stream" value={snapshot?.cameraActive ? "ACTIVE" : "INACTIVE"} />
+              <Item label="MediaPipe frame loop" value={snapshot?.poseLoop === "active" ? "ACTIVE" : "STOPPED"} />
+              <Item label="Last pose frame" value={snapshot?.lastPoseAt == null ? "—" : `${Math.round(snapshot.lastPoseAt)} ms`} />
               <Item label="Algorithm" value={snapshot ? ALGORITHM_INFO[snapshot.algorithm].label : "—"} />
               <Item label="Frame rate" value={snapshot ? String(snapshot.fps) : "—"} />
               <Item label="Record" value={recorder ? `${recorder.phase} · pose ${recorder.poseFps} · video ${recorder.recordFps}` : "—"} />
@@ -214,6 +225,11 @@ function Item({ label, value }: { label: string; value: string }) {
 function VecItem({ label, point }: { label: string; point: { x: number; y: number; z: number; visibility?: number } | null | undefined }) {
   const value = point ? `${point.x.toFixed(3)}, ${point.y.toFixed(3)}, ${point.z.toFixed(3)}` : "—";
   return <Item label={label} value={value} />;
+}
+
+function yesNo(value: boolean | undefined): string {
+  if (value == null) return "—";
+  return value ? "YES" : "NO";
 }
 
 function deg(value: number | null | undefined): string {
