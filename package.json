@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --port 5191 --strictPort",
     "check": "tsx scripts/check-tl-math.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
     "react": "^19.0.0",
