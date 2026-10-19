@@ -1,0 +1,13 @@
+anatomical-body.glb
+--------------------
+Source: male_base.glb from the PMotion vision-assessment repo
+  (originally used for synthetic ROM lab; low-poly base mesh).
+Upstream reference in syntheticHuman3d.ts:
+  https://raw.githubusercontent.com/BoQsc/Godot-3D-Male-Base-Mesh/main/Original/male_base_mesh.glb
+
+This file is an OPTIONAL drop-in path for a future production anatomical GLB.
+Phase 1 Movement Profile renders a PMotion procedural anatomical mannequin by default
+(see src/model/modelManifest.ts) so the product is not dependent on Zygote or other
+proprietary anatomy libraries.
+
+Zygote Body is a visual design reference only — do not bundle Zygote assets.
