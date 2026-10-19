@@ -3,6 +3,16 @@ import type { CameraFacing, RotationAlgorithm } from "./tlRotation";
 
 export type RotationDirection = "left" | "right";
 
+export type ShoulderTrustDebug = {
+  side: "left" | "right";
+  visibility: number;
+  anatomicalValid: boolean;
+  status: "ok" | "low_visibility" | "corrupted";
+  trusted: boolean;
+  reasons: string[];
+  using: "mediapipe" | "reconstructed";
+};
+
 export type TLStateName =
   | "SEARCHING"
   | "POSITIONING"
@@ -150,11 +160,25 @@ export type TLSnapshot = {
   anchorShoulder: "left" | "right";
   /** RIGHT for right rotation; LEFT for left rotation. */
   occludedShoulder: "left" | "right";
-  trackingMode: "TWO_SHOULDER" | "SINGLE_SHOULDER_ASSISTED";
+  trackingMode: "REAL_BOTH_SHOULDERS" | "OCCLUSION_ASSISTED";
   leftShoulderVisibility: number;
   rightShoulderVisibility: number;
   leftHipVisibility: number;
   rightHipVisibility: number;
+  /** Ungated MediaPipe torso–pelvis ROM (may include corrupted shoulder). */
+  mediaPipeRawRom: number | null;
+  /** ROM after anatomical shoulder reconstruction. */
+  hybridRom: number | null;
+  leftShoulderTrust: ShoulderTrustDebug | null;
+  rightShoulderTrust: ShoulderTrustDebug | null;
+  /** Image-space MediaPipe shoulder axis (raw). */
+  mediaPipeShoulderAxis: { x1: number; y1: number; x2: number; y2: number } | null;
+  /** Image-space corrected shoulder axis used for hybrid ROM. */
+  correctedShoulderAxis: { x1: number; y1: number; x2: number; y2: number } | null;
+  mediaPipeLeftShoulderImage: { x: number; y: number } | null;
+  mediaPipeRightShoulderImage: { x: number; y: number } | null;
+  correctedLeftShoulderImage: { x: number; y: number } | null;
+  correctedRightShoulderImage: { x: number; y: number } | null;
   depthAssistedRom: number | null;
   /** Same formula as Raw, but from spike-gated landmarks. Diagnostic only. */
   gatedRom: number | null;

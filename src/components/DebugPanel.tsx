@@ -68,8 +68,8 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Algorithm" value={snapshot ? ALGORITHM_INFO[snapshot.algorithm].label : "—"} />
               <Item label="Frame rate" value={snapshot ? String(snapshot.fps) : "—"} />
               <Item label="Record" value={recorder ? `${recorder.phase} · pose ${recorder.poseFps} · video ${recorder.recordFps}` : "—"} />
-              <Item label="RAW ROM (ungated)" value={deg(snapshot?.rom.raw)} />
-              <Item label="SMOOTHED ROM" value={deg(snapshot?.rom.filtered)} />
+              <Item label="RAW ROM (MediaPipe ungated)" value={deg(snapshot?.rom.raw)} />
+              <Item label="SMOOTHED HYBRID ROM" value={deg(snapshot?.rom.filtered)} />
               <Item label="ACCEPTED ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
               <Item label="MAX ACCEPTED ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
               <Item label="Gated ROM (diagnostic)" value={deg(snapshot?.gatedRom)} />
@@ -92,6 +92,15 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="TRACKING CONFIDENCE" value={snapshot ? `${snapshot.trackingBand.toUpperCase()} (${snapshot.trackingScore}%)` : "—"} />
               <Item label="Occlusion state" value={snapshot?.occlusionLabel ?? "—"} />
               <Item label="Rejected" value={snapshot?.rejectReason || "—"} />
+              <Item label="MediaPipe Raw Shoulder ROM" value={deg(snapshot?.mediaPipeRawRom)} />
+              <Item label="Corrected Hybrid ROM" value={deg(snapshot?.hybridRom)} />
+              <Item label="Accepted ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
+              <Item label="LEFT anatomical validity" value={trustLabel(snapshot?.leftShoulderTrust)} />
+              <Item label="LEFT rejection reasons" value={reasonList(snapshot?.leftShoulderTrust)} />
+              <Item label="LEFT using" value={snapshot?.leftShoulderTrust?.using?.toUpperCase() ?? "—"} />
+              <Item label="RIGHT anatomical validity" value={trustLabel(snapshot?.rightShoulderTrust)} />
+              <Item label="RIGHT rejection reasons" value={reasonList(snapshot?.rightShoulderTrust)} />
+              <Item label="RIGHT using" value={snapshot?.rightShoulderTrust?.using?.toUpperCase() ?? "—"} />
               <Item label="Left shoulder visibility" value={num(snapshot?.leftShoulderVisibility)} />
               <Item label="Right shoulder visibility" value={num(snapshot?.rightShoulderVisibility)} />
               <Item label="Left hip visibility" value={num(snapshot?.leftHipVisibility)} />
@@ -281,4 +290,17 @@ function num(value: number | null | undefined): string {
 }
 function trim(value: number): string {
   return Number(value.toFixed(3)).toString();
+}
+
+function trustLabel(trust: TLSnapshot["leftShoulderTrust"] | undefined): string {
+  if (!trust) return "—";
+  if (trust.status === "corrupted") return "FAIL · SHOULDER_CORRUPTED";
+  if (trust.status === "low_visibility") return "FAIL · LOW_VISIBILITY";
+  return trust.anatomicalValid ? "PASS" : "FAIL";
+}
+
+function reasonList(trust: TLSnapshot["leftShoulderTrust"] | undefined): string {
+  if (!trust) return "—";
+  if (trust.reasons.length === 0) return "None";
+  return trust.reasons.join("; ");
 }

@@ -442,6 +442,9 @@ export function syntheticSeated(options: SyntheticOptions = {}): { image: Vec[];
   put(LM.rightHip, rot({ x: 0.12 + hipShift, y: 0, z: 0 }, pelvisYaw));
   put(LM.leftShoulder, { ...rot({ x: -0.2, y: 0.52, z: 0 }, shoulderYaw), x: rot({ x: -0.2, y: 0.52, z: 0 }, shoulderYaw).x + leanRight, z: rot({ x: -0.2, y: 0.52, z: 0 }, shoulderYaw).z + leanForward });
   put(LM.rightShoulder, { ...rot({ x: 0.2, y: 0.52, z: 0 }, shoulderYaw), x: rot({ x: 0.2, y: 0.52, z: 0 }, shoulderYaw).x + leanRight, z: rot({ x: 0.2, y: 0.52, z: 0 }, shoulderYaw).z + leanForward });
+  // Hands-behind-head elbows stay out even while the trunk rotates.
+  put(LM.leftElbow, { ...rot({ x: -0.34, y: 0.62, z: 0.08 }, shoulderYaw), x: rot({ x: -0.34, y: 0.62, z: 0.08 }, shoulderYaw).x + leanRight, z: rot({ x: -0.34, y: 0.62, z: 0.08 }, shoulderYaw).z + leanForward });
+  put(LM.rightElbow, { ...rot({ x: 0.34, y: 0.62, z: 0.08 }, shoulderYaw), x: rot({ x: 0.34, y: 0.62, z: 0.08 }, shoulderYaw).x + leanRight, z: rot({ x: 0.34, y: 0.62, z: 0.08 }, shoulderYaw).z + leanForward });
   put(LM.leftEar, rot({ x: -0.08, y: 0.68, z: 0.04 }, shoulderYaw));
   put(LM.rightEar, rot({ x: 0.08, y: 0.68, z: 0.04 }, shoulderYaw));
   put(LM.nose, { x: 0, y: 0.72, z: 0.16 });

@@ -49,13 +49,39 @@ export function drawTlOverlay(ctx: CanvasRenderingContext2D, width: number, heig
   const pelvis = paint(snapshot, ["pelvis-rotation", "pelvis-translation", "hip-shift"], "#d7e6f5");
   const knees = paint(snapshot, ["knee-shift"], "#3ddc84");
 
-  line(ctx, mx(shL.x), shL.y, mx(shR.x), shR.y, trunk, 5);
+  // Raw MediaPipe shoulder axis (may snap toward the chin when corrupted).
+  const rawAxis = snapshot.mediaPipeShoulderAxis;
+  if (rawAxis) {
+    ctx.save();
+    ctx.setLineDash([5, 5]);
+    line(ctx, mx(rawAxis.x1), rawAxis.y1, mx(rawAxis.x2), rawAxis.y2, "rgba(255,93,93,0.85)", 3);
+    ctx.restore();
+  }
+  const mpL = snapshot.mediaPipeLeftShoulderImage;
+  const mpR = snapshot.mediaPipeRightShoulderImage;
+  if (mpL) dot(ctx, mx(mpL.x), mpL.y, 7, "#ff5d5d");
+  if (mpR) dot(ctx, mx(mpR.x), mpR.y, 7, "#ff5d5d");
+
+  // Corrected anatomical shoulder axis used for hybrid ROM.
+  const corrAxis = snapshot.correctedShoulderAxis;
+  if (corrAxis) {
+    line(ctx, mx(corrAxis.x1), corrAxis.y1, mx(corrAxis.x2), corrAxis.y2, "#4da3ff", 5);
+  }
+  const cL = snapshot.correctedLeftShoulderImage;
+  const cR = snapshot.correctedRightShoulderImage;
+  if (cL) {
+    ring(ctx, mx(cL.x), cL.y, 9, "#4da3ff");
+    if (snapshot.leftShoulderTrust?.using === "reconstructed") dot(ctx, mx(cL.x), cL.y, 5, "#4da3ff");
+  }
+  if (cR) {
+    ring(ctx, mx(cR.x), cR.y, 9, "#4da3ff");
+    if (snapshot.rightShoulderTrust?.using === "reconstructed") dot(ctx, mx(cR.x), cR.y, 5, "#4da3ff");
+  }
+
   line(ctx, mx(hipL.x), hipL.y, mx(hipR.x), hipR.y, pelvis, 5);
   line(ctx, mx(midSh.x), midSh.y, mx(midHip.x), midHip.y, trunk, 3);
   dot(ctx, mx(kneeL.x), kneeL.y, 6, knees);
   dot(ctx, mx(kneeR.x), kneeR.y, 6, knees);
-  ring(ctx, mx(shL.x), shL.y, 8, trunk);
-  ring(ctx, mx(shR.x), shR.y, 8, trunk);
   ring(ctx, mx(hipL.x), hipL.y, 8, pelvis);
   ring(ctx, mx(hipR.x), hipR.y, 8, pelvis);
 
@@ -67,7 +93,7 @@ export function drawTlOverlay(ctx: CanvasRenderingContext2D, width: number, heig
     ctx.restore();
   }
 
-  const angle = snapshot.rom.filtered;
+  const angle = snapshot.hybridRom ?? snapshot.rom.filtered;
   if (angle != null && (snapshot.movementStarted || snapshot.state === "COMPLETE")) {
     const label = `${angle.toFixed(1)}°`;
     ctx.font = "600 28px system-ui, sans-serif";

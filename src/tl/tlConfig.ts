@@ -52,6 +52,24 @@ export type TLConfig = {
   maxAngleJumpDeg: number;
   /** Reject angular speed above this (°/s). Natural rotation is usually well below. */
   maxAngularVelocityDegPerSec: number;
+  /** Shoulder-to-ear distance below this fraction of calibration → SHOULDER_CORRUPTED. */
+  shoulderEarCollapseRatio: number;
+  /** Shoulder-to-nose distance below this fraction of calibration → SHOULDER_CORRUPTED. */
+  shoulderNoseCollapseRatio: number;
+  /** Upper-arm length |Δ| above this % of calibration → SHOULDER_CORRUPTED. */
+  upperArmLengthTolPct: number;
+  /** Shoulder width |Δ| above this % of calibration → SHOULDER_CORRUPTED. */
+  shoulderWidthTolPct: number;
+  /** Vertical jump (in shoulder-widths, after torso cancel) → SHOULDER_CORRUPTED. */
+  shoulderVerticalJumpRatio: number;
+  /** Lateral distance below this fraction of calibration → near centerline/head. */
+  shoulderLateralCollapseRatio: number;
+  /** Frame-to-frame shoulder-axis jump above this → suspicious. */
+  shoulderAxisJumpDeg: number;
+  /** Consecutive anatomically-ok frames before leaving OCCLUSION_ASSISTED. */
+  shoulderRecoverFrames: number;
+  /** Blend reconstructed → MediaPipe over this many ms when recovering. */
+  shoulderBlendMs: number;
   /** Development-only camera offset guide. Does not change the angle math. */
   cameraGuideOffsetDeg: number;
   trackingLostMs: number;
@@ -120,6 +138,15 @@ export const TL_CONFIG: TLConfig = {
   occlusionHoldMs: 550,
   maxAngleJumpDeg: 18,
   maxAngularVelocityDegPerSec: 220,
+  shoulderEarCollapseRatio: 0.45,
+  shoulderNoseCollapseRatio: 0.5,
+  upperArmLengthTolPct: 35,
+  shoulderWidthTolPct: 35,
+  shoulderVerticalJumpRatio: 0.28,
+  shoulderLateralCollapseRatio: 0.4,
+  shoulderAxisJumpDeg: 22,
+  shoulderRecoverFrames: 4,
+  shoulderBlendMs: 300,
   cameraGuideOffsetDeg: 0,
   trackingLostMs: 400,
   trackingResetMs: 2500,
@@ -264,6 +291,15 @@ export const TL_CONFIG_FIELDS: ConfigField[] = [
   r("occlusionHoldMs", "Far-shoulder occlusion hold", "Tracking", 200, 1000, 50, "ms"),
   r("maxAngleJumpDeg", "Max ROM jump per frame", "Tracking", 6, 40, 1, "deg"),
   r("maxAngularVelocityDegPerSec", "Max angular velocity", "Tracking", 80, 400, 10, "deg/s"),
+  r("shoulderEarCollapseRatio", "Shoulder-ear collapse ratio", "Tracking", 0.2, 0.8, 0.05, ""),
+  r("shoulderNoseCollapseRatio", "Shoulder-nose collapse ratio", "Tracking", 0.2, 0.8, 0.05, ""),
+  r("upperArmLengthTolPct", "Upper-arm length tolerance", "Tracking", 15, 70, 1, "%"),
+  r("shoulderWidthTolPct", "Shoulder width tolerance", "Tracking", 15, 70, 1, "%"),
+  r("shoulderVerticalJumpRatio", "Vertical jump (shoulder widths)", "Tracking", 0.1, 0.6, 0.02, ""),
+  r("shoulderLateralCollapseRatio", "Lateral collapse ratio", "Tracking", 0.2, 0.8, 0.05, ""),
+  r("shoulderAxisJumpDeg", "Shoulder-axis jump gate", "Tracking", 8, 45, 1, "deg"),
+  r("shoulderRecoverFrames", "Frames to trust MediaPipe again", "Tracking", 2, 12, 1, "frames"),
+  r("shoulderBlendMs", "Reconstructed→real blend", "Tracking", 100, 600, 50, "ms"),
   r("cameraGuideOffsetDeg", "Camera offset guide (dev)", "Setup", 0, 20, 5, "deg"),
 ];
 

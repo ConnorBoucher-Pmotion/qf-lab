@@ -450,8 +450,8 @@ if (duringOcclusion.trackingBand === "invalid") throw new Error(`occlusion was t
 if (duringOcclusion.anchorShoulder !== "left" || duringOcclusion.occludedShoulder !== "right") {
   throw new Error(`RIGHT rotation mapped anchor=${duringOcclusion.anchorShoulder} occluded=${duringOcclusion.occludedShoulder}`);
 }
-if (duringOcclusion.trackingMode !== "SINGLE_SHOULDER_ASSISTED") {
-  throw new Error(`expected SINGLE_SHOULDER_ASSISTED during RIGHT occluded shoulder, got ${duringOcclusion.trackingMode}`);
+if (duringOcclusion.trackingMode !== "OCCLUSION_ASSISTED") {
+  throw new Error(`expected OCCLUSION_ASSISTED during RIGHT occluded shoulder, got ${duringOcclusion.trackingMode}`);
 }
 if (!duringOcclusion.movementValid) throw new Error("expected occlusion should keep movement validity PASS");
 const rolesRight = landmarkVis(syntheticSeated().world, "right");
@@ -475,13 +475,45 @@ const scored = evaluateAcceptance({
   direction: "right",
   spike: false,
   hardPersistFailed: false,
-  mode: "SINGLE_SHOULDER_ASSISTED",
+  mode: "OCCLUSION_ASSISTED",
 });
 if (scored.band === "invalid" || (!scored.acceptPeak && !scored.candidateOnly)) {
   throw new Error(`far-shoulder dimming scored ${scored.band}`);
 }
 if (scored.occlusion !== "expected-far-shoulder" && scored.occlusion !== "none") {
   throw new Error(`RIGHT occluded shoulder should be expected occlusion, got ${scored.occlusion}`);
+}
+
+// Chin/neck snap: high MediaPipe visibility but anatomically corrupted RIGHT shoulder.
+const corrupt = new TLSession(normalizeConfig({ ...fast, captureWindowMs: 5000, occlusionHoldMs: 700 }), "right");
+let tc = feed(corrupt, syntheticSeated(), 40, 0);
+corrupt.arm(tc);
+tc += 33;
+for (let i = 0; i < 14; i += 1) {
+  corrupt.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 20 + i * 1.1, pelvisYawDeg: 1 }) }, tc);
+  tc += 33;
+}
+const beforeSnap = corrupt.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 34, pelvisYawDeg: 1 }) }, tc);
+tc += 33;
+const snap = syntheticSeated({ shoulderYawDeg: 36, pelvisYawDeg: 1 });
+const nose = snap.world[LM.nose];
+snap.world[LM.rightShoulder] = { x: nose.x + 0.02, y: nose.y - 0.02, z: nose.z, visibility: 0.82 };
+snap.image[LM.rightShoulder] = {
+  x: snap.image[LM.nose].x + 8,
+  y: snap.image[LM.nose].y + 6,
+  z: snap.image[LM.nose].z,
+  visibility: 0.82,
+};
+const afterSnap = corrupt.push({ width: 1280, height: 720, ...snap }, tc);
+if (afterSnap.rightShoulderTrust?.status !== "corrupted") {
+  throw new Error(`chin snap was not SHOULDER_CORRUPTED (${afterSnap.rightShoulderTrust?.status}: ${afterSnap.rightShoulderTrust?.reasons.join(", ")})`);
+}
+if (afterSnap.trackingMode !== "OCCLUSION_ASSISTED") {
+  throw new Error(`corrupted shoulder should use OCCLUSION_ASSISTED, got ${afterSnap.trackingMode}`);
+}
+if (!afterSnap.movementValid) throw new Error("corrupted shoulder must not turn the trial RED");
+if ((afterSnap.hybridRom ?? 0) + 4 < (beforeSnap.hybridRom ?? 0)) {
+  throw new Error(`hybrid ROM collapsed on chin snap (${beforeSnap.hybridRom} → ${afterSnap.hybridRom}); MediaPipe raw=${afterSnap.mediaPipeRawRom}`);
 }
 
 const oldFilter = new OneEuroFilter(1.2, 0.04);

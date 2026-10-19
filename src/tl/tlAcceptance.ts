@@ -92,10 +92,11 @@ export function scoreTracking(
     return { band: "invalid", score: Math.min(vis.anchorShoulder, hips), occlusion: occludedLowForMs > 0 ? "expected-far-shoulder" : "none" };
   }
 
+  const assisted = mode === "OCCLUSION_ASSISTED";
   const occludedOk = vis.occludedShoulder >= min;
-  const occludedSoft = vis.occludedShoulder >= soft || mode === "SINGLE_SHOULDER_ASSISTED";
+  const occludedSoft = vis.occludedShoulder >= soft || assisted;
   const occlusion: OcclusionState =
-    !occludedOk && occludedSoft
+    assisted || (!occludedOk && occludedSoft)
       ? "expected-far-shoulder"
       : !occludedSoft && occludedLowForMs <= config.occlusionHoldMs
         ? "expected-far-shoulder"
@@ -104,15 +105,15 @@ export function scoreTracking(
           : "none";
 
   let score = vis.anchorShoulder * 0.5 + Math.max(vis.occludedShoulder, soft) * 0.15 + hips * 0.35;
-  if (mode === "SINGLE_SHOULDER_ASSISTED") score = vis.anchorShoulder * 0.55 + hips * 0.45;
+  if (assisted) score = vis.anchorShoulder * 0.55 + hips * 0.45;
   if (occlusion === "expected-far-shoulder") score *= 0.94;
   if (occlusion === "prolonged") score *= 0.7;
   score = Math.max(0, Math.min(1, score));
 
-  if (occlusion === "prolonged" && vis.occludedShoulder < soft * 0.5 && mode !== "SINGLE_SHOULDER_ASSISTED") {
+  if (occlusion === "prolonged" && vis.occludedShoulder < soft * 0.5 && !assisted) {
     return { band: "low", score, occlusion };
   }
-  if (occlusion === "expected-far-shoulder" || mode === "SINGLE_SHOULDER_ASSISTED" || score < 0.72) {
+  if (occlusion === "expected-far-shoulder" || assisted || score < 0.72) {
     return { band: score >= 0.55 ? "medium" : "low", score, occlusion: occlusion === "none" ? "expected-far-shoulder" : occlusion };
   }
   if (score >= 0.78 && occludedOk) return { band: "high", score, occlusion: "none" };
@@ -131,7 +132,7 @@ export function evaluateAcceptance(input: {
 }): AcceptanceFrame {
   const rejected = input.hardPersistFailed ? movementReject(input.checks) : null;
   const movementValid = rejected == null;
-  const tracked = scoreTracking(input.vis, input.config, input.farLowForMs, movementValid, input.spike, input.mode ?? "TWO_SHOULDER");
+  const tracked = scoreTracking(input.vis, input.config, input.farLowForMs, movementValid, input.spike, input.mode ?? "REAL_BOTH_SHOULDERS");
   let rejectReason = "";
   if (input.spike) rejectReason = "Large landmark jump";
   else if (rejected) rejectReason = rejected.message || rejected.label;
