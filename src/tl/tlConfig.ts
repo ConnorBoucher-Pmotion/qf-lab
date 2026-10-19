@@ -72,6 +72,8 @@ export type TLConfig = {
   filterVersion: number;
   /** Internal. Stops the one-time pelvis-threshold migration from repeating. */
   constraintVersion: number;
+  /** Internal. Moves the old 0.75s thumb hold and 1.5s countdown up to the 2s / 3s flow once. */
+  flowVersion: number;
   hardFailPersistMs: number;
 };
 
@@ -82,8 +84,8 @@ export const TL_CONFIG: TLConfig = {
   minVelocityDegPerSec: 10,
   movementConfirmMs: 250,
   movementConfirmFrames: 4,
-  countdownMs: 1500,
-  thumbStableMs: 750,
+  countdownMs: 3000,
+  thumbStableMs: 2000,
   captureWindowMs: 8000,
   minActiveMs: 2000,
   minPeakRomDeg: 20,
@@ -129,6 +131,7 @@ export const TL_CONFIG: TLConfig = {
   facingThresholdVersion: 2,
   filterVersion: 2,
   constraintVersion: 3,
+  flowVersion: 2,
   hardFailPersistMs: 400,
 };
 
@@ -193,7 +196,7 @@ export const TL_CONFIG_FIELDS: ConfigField[] = [
     options: ROTATION_ALGORITHMS.map((id) => ({ value: id, label: ALGORITHM_INFO[id].label })),
   },
   r("countdownMs", "Start countdown", "Measurement", 0, 3000, 100, "ms"),
-  r("thumbStableMs", "Thumbs-up must hold", "Measurement", 400, 1500, 50, "ms"),
+  r("thumbStableMs", "Thumbs-up must hold", "Measurement", 1000, 3000, 100, "ms"),
   r("captureWindowMs", "Capture window", "Measurement", 5000, 10000, 500, "ms"),
   { kind: "toggle", key: "romTestMode", label: "ROM algorithm test mode", group: "Measurement" },
   r("stableMs", "Neutral stillness before calibration", "Neutral calibration", 200, 2000, 50, "ms"),
@@ -281,6 +284,10 @@ export function normalizeConfig(input: unknown): TLConfig {
     if (out.pelvisRotationFailDeg === 5) out.pelvisRotationFailDeg = 12;
     if (out.pelvisRotationWarnDeg === 3 && out.pelvisRotationWarnDeg < out.pelvisRotationFailDeg) out.pelvisRotationWarnDeg = Math.min(7, out.pelvisRotationFailDeg - 0.5);
     if (out.hardFailPersistMs === 300) out.hardFailPersistMs = 400;
+  }
+  if (source.flowVersion !== 2) {
+    if (out.thumbStableMs === 750) out.thumbStableMs = 2000;
+    if (out.countdownMs === 1500) out.countdownMs = 3000;
   }
   return out;
 }

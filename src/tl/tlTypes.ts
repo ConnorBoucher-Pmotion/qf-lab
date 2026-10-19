@@ -9,6 +9,7 @@ export type TLStateName =
   | "STABLE"
   | "CALIBRATING"
   | "READY"
+  | "READY_CONFIRMING"
   | "COUNTDOWN"
   | "ACTIVE"
   | "MEASURING"
@@ -127,8 +128,12 @@ export type TLSnapshot = {
   romTestMode: boolean;
   /** Milliseconds left in the active capture window. */
   captureRemainingMs: number | null;
-  /** 0–1 while a thumbs-up is being held in READY. */
+  /** 0–1 while a thumbs-up is being held before the countdown. */
   thumbProgress: number;
+  /** True on a frame where a thumbs-up is currently visible. */
+  thumbSeen: boolean;
+  /** Starting position is valid and a thumbs-up, voice command, or button can start the countdown. */
+  canStart: boolean;
   /** What the user should fix during the capture window. "Movement valid" when the angle can count. */
   movementMessage: string;
   rawShoulderYawDeg: number | null;

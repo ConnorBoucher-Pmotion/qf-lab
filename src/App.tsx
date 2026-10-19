@@ -10,6 +10,7 @@ import { TrialVideoDialog } from "./components/TrialVideoDialog";
 import type { RecorderStatus, SavedRecording } from "./recording/trialRecorder";
 import { deleteRecording, listRecordingIds, putRecording } from "./recording/recordingStore";
 import { loadConfig, loadSeries, loadTrials, saveConfig, saveSeries, saveTrials, withGoniometer } from "./storage/trials";
+import { speak, useReadyVoice } from "./audio/cues";
 import type { TLConfig } from "./tl/tlConfig";
 import type { RotationDirection, TLResult, TLSnapshot, TLTrial, TrialRecording } from "./tl/tlTypes";
 
@@ -20,6 +21,7 @@ export function App() {
   const [resetSignal, setResetSignal] = useState(0);
   const [nextSignal, setNextSignal] = useState(0);
   const [startSignal, setStartSignal] = useState(0);
+  const [voiceSignal, setVoiceSignal] = useState(0);
   const [acceptSignal, setAcceptSignal] = useState(0);
   const [snapshot, setSnapshot] = useState<TLSnapshot | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
@@ -100,14 +102,21 @@ export function App() {
   seriesRef.current = series;
   preRollRef.current = preRollMs;
 
+  const canListen = (snapshot?.state === "READY" || snapshot?.state === "READY_CONFIRMING") && snapshot.canStart && !config.romTestMode;
+  const mic = useReadyVoice(canListen, () => setVoiceSignal((value) => value + 1));
+
   useEffect(() => {
     const state = snapshot?.state ?? null;
     if (!state || state === heardState.current) return;
     const previous = heardState.current;
     heardState.current = state;
-    if (state === "COUNTDOWN" && previous === "READY") playTone(520, 100);
-    if (state === "ACTIVE" && (previous === "COUNTDOWN" || previous === "READY")) playTone(880, 180);
-  }, [snapshot?.state]);
+    if (state === "COUNTDOWN" && (previous === "READY" || previous === "READY_CONFIRMING")) playTone(660, 140);
+    if (state === "ACTIVE" && (previous === "COUNTDOWN" || previous === "READY" || previous === "READY_CONFIRMING")) {
+      playTone(880, 160);
+      speak(snapshot?.direction === "left" ? "Rotate left" : "Rotate right");
+    }
+    if (state === "COMPLETE" && snapshot?.result?.accepted && snapshot.result.measuredRom != null) speak("Assessment Completed");
+  }, [snapshot?.state, snapshot?.direction, snapshot?.result]);
 
   return (
     <div className="page">
@@ -151,6 +160,7 @@ export function App() {
                 resetSignal={resetSignal}
                 nextSignal={nextSignal}
                 startSignal={startSignal}
+                voiceSignal={voiceSignal}
                 acceptSignal={acceptSignal}
                 preRollMs={preRollMs}
                 postRollMs={postRollMs}
@@ -162,9 +172,10 @@ export function App() {
             </div>
             <div className="instruction-bar">
               <p className={`instruction tone-${instructionTone(snapshot?.state)}`}>{snapshot?.instruction ?? "Sit facing the camera."}</p>
+              {snapshot?.canStart ? <ReadyPrompt snapshot={snapshot} mic={mic} /> : null}
               {snapshot?.blockedBy ? <p className="blocked-by">{snapshot.blockedBy}</p> : null}
               <div className="start-row">
-                <button type="button" disabled={snapshot?.state !== "READY" || config.romTestMode} onClick={() => setStartSignal((value) => value + 1)}>
+                <button type="button" disabled={(snapshot?.state !== "READY" && snapshot?.state !== "READY_CONFIRMING") || config.romTestMode} onClick={() => setStartSignal((value) => value + 1)}>
                   I'm Ready
                 </button>
                 <button type="button" disabled={!snapshot?.movementStarted || snapshot.result != null} onClick={() => setAcceptSignal((value) => value + 1)}>
@@ -238,6 +249,23 @@ export function App() {
 
 function nextAttempt(saved: TLTrial[], seriesName: string): number {
   return saved.filter((trial) => trial.series === seriesName).reduce((max, trial) => Math.max(max, trial.trialNumber), 0) + 1;
+}
+
+function ReadyPrompt({ snapshot, mic }: { snapshot: TLSnapshot; mic: "unknown" | "granted" | "needs-mic" | "unavailable" }) {
+  const percent = Math.round(snapshot.thumbProgress * 100);
+  return (
+    <div className="ready-card">
+      <p className="ready-title">Position looks good</p>
+      <p>{snapshot.thumbSeen ? "👍 Ready gesture detected — keep holding" : "👍 Hold thumbs up when ready"}</p>
+      <p>or say "Ready"</p>
+      <div className="thumb-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label="Thumbs-up hold">
+        <span style={{ width: `${percent}%` }} />
+      </div>
+      <p className="thumb-percent">{percent}%</p>
+      {mic === "needs-mic" ? <p className="mic-note">Enable microphone to use voice start</p> : null}
+      {mic === "unavailable" ? <p className="mic-note">Voice start is not available in this browser. Use the thumbs up or I'm Ready.</p> : null}
+    </div>
+  );
 }
 
 function tone(snapshot: TLSnapshot | null): string {

@@ -1,3 +1,4 @@
+import { isReadyPhrase } from "../src/audio/cues";
 import { grade } from "../src/tl/tlCompensation";
 import { TL_CONFIG, normalizeConfig } from "../src/tl/tlConfig";
 import { TLSession } from "../src/tl/tlStateMachine";
@@ -96,6 +97,26 @@ const fast = normalizeConfig({
   filterVersion: 2,
   facingThresholdVersion: 2,
 });
+
+function withHands(mode: "down" | "behind"): ReturnType<typeof syntheticSeated> {
+  const pose = syntheticSeated();
+  const put = (index: number, x: number, y: number, z: number) => {
+    pose.world[index] = { x, y, z, visibility: 0.95 };
+    pose.image[index] = { x: 640 + x * 1280 * 0.85, y: 720 * 0.48 - y * 720 * 0.62, z: -z * 1280 * 0.85, visibility: 0.95 };
+  };
+  if (mode === "behind") {
+    put(LM.leftWrist, -0.1, 0.74, 0);
+    put(LM.rightWrist, 0.1, 0.74, 0);
+    put(LM.leftElbow, -0.34, 0.58, 0.02);
+    put(LM.rightElbow, 0.34, 0.58, 0.02);
+  } else {
+    put(LM.leftWrist, -0.12, 0.15, 0.4);
+    put(LM.rightWrist, 0.12, 0.15, 0.4);
+    put(LM.leftElbow, -0.28, 0.28, 0.2);
+    put(LM.rightElbow, 0.28, 0.28, 0.2);
+  }
+  return pose;
+}
 
 function feed(session: TLSession, pose: ReturnType<typeof syntheticSeated>, frames: number, start: number): number {
   let t = start;
@@ -314,17 +335,70 @@ if (duringLean.state === "COMPLETE") throw new Error("a lean ended the capture w
 if ((duringLean.rom.validPeak ?? 0) > frozen + 1) throw new Error(`invalid frames raised the best ROM to ${duringLean.rom.validPeak}`);
 if ((duringLean.rom.raw ?? 0) < 40) throw new Error(`live angle stopped during the lean (${duringLean.rom.raw})`);
 
-const thumb = new TLSession(normalizeConfig({ ...fast, thumbStableMs: 400, countdownMs: 600 }), "right");
+const thumb = new TLSession(normalizeConfig({ ...fast, thumbStableMs: 2000, countdownMs: 600 }), "right");
 let tt = feed(thumb, syntheticSeated(), 40, 0);
 const flicker = thumb.push({ width: 1280, height: 720, ...syntheticSeated(), thumbUp: true }, tt);
-if (flicker.state !== "READY") throw new Error(`one thumbs-up frame started the trial (${flicker.state})`);
+if (flicker.state === "COUNTDOWN" || flicker.state === "ACTIVE" || flicker.movementStarted) throw new Error(`one thumbs-up frame started the trial (${flicker.state})`);
 tt += 33;
-for (let i = 0; i < 16; i += 1) {
+for (let i = 0; i < 12; i += 1) {
   thumb.push({ width: 1280, height: 720, ...syntheticSeated(), thumbUp: true }, tt);
   tt += 33;
 }
-const armedByThumb = thumb.push({ width: 1280, height: 720, ...syntheticSeated() }, tt);
-if (armedByThumb.state !== "COUNTDOWN") throw new Error(`a held thumbs up did not start the countdown (${armedByThumb.state})`);
+const partial = thumb.push({ width: 1280, height: 720, ...syntheticSeated(), thumbUp: true }, tt);
+if (partial.state !== "READY_CONFIRMING" || partial.movementStarted) throw new Error(`a partial thumbs-up hold started the trial (${partial.state})`);
+for (let i = 0; i < 6; i += 1) {
+  thumb.push({ width: 1280, height: 720, ...syntheticSeated() }, tt);
+  tt += 33;
+}
+const dropped = thumb.push({ width: 1280, height: 720, ...syntheticSeated() }, tt);
+if (dropped.state === "COUNTDOWN" || dropped.movementStarted) throw new Error("losing the thumbs up started the trial");
+let armedByThumb = dropped;
+for (let i = 0; i < 90 && armedByThumb.state !== "COUNTDOWN"; i += 1) {
+  armedByThumb = thumb.push({ width: 1280, height: 720, ...syntheticSeated(), thumbUp: true }, tt);
+  tt += 33;
+}
+if (armedByThumb.state !== "COUNTDOWN") throw new Error(`a 2 second thumbs up did not start the countdown (${armedByThumb.state}, progress ${armedByThumb.thumbProgress})`);
+
+if (!isReadyPhrase("Ready") || !isReadyPhrase("I'm ready now") || isReadyPhrase("already") || isReadyPhrase("red")) {
+  throw new Error("ready phrase matching is wrong");
+}
+const voice = new TLSession(normalizeConfig({ ...fast, countdownMs: 900 }), "right");
+let tv = feed(voice, syntheticSeated(), 40, 0);
+const waiting = voice.push({ width: 1280, height: 720, ...syntheticSeated() }, tv);
+if (waiting.state !== "READY" || !waiting.canStart) throw new Error(`voice start was not available (${waiting.state})`);
+voice.hearReady(tv);
+voice.hearReady(tv + 20);
+const heard = voice.push({ width: 1280, height: 720, ...syntheticSeated() }, tv + 40);
+if (heard.state !== "COUNTDOWN" || heard.movementStarted) throw new Error(`saying ready did not start one countdown (${heard.state})`);
+const posed = new TLSession(fast, "right");
+posed.hearReady(10);
+if (posed.push({ width: 1280, height: 720, ...syntheticSeated() }, 40).state === "COUNTDOWN") throw new Error("ready was accepted before the position was valid");
+
+const returned = new TLSession(normalizeConfig({ ...fast, countdownMs: 400 }), "right");
+let tr = feed(returned, syntheticSeated(), 40, 0);
+const armAt = tr;
+returned.arm(tr);
+let waitingHands = returned.push({ width: 1280, height: 720, ...withHands("down") }, tr);
+while (tr < armAt + 1100) {
+  tr += 33;
+  waitingHands = returned.push({ width: 1280, height: 720, ...withHands("down") }, tr);
+}
+if (waitingHands.movementStarted || !waitingHands.instruction.startsWith("Return both hands")) {
+  throw new Error(`hands-down countdown started measuring (${waitingHands.state}: ${waitingHands.instruction})`);
+}
+let resumed = waitingHands;
+const resumeStart = tr;
+while (resumed.countdownLabel == null && tr < resumeStart + 1500) {
+  tr += 33;
+  resumed = returned.push({ width: 1280, height: 720, ...withHands("behind") }, tr);
+}
+if (resumed.movementStarted || resumed.countdownLabel == null) throw new Error(`hands returning did not restart the countdown (${resumed.state}, ${resumed.countdownLabel})`);
+const resumeAt = tr;
+while (!resumed.movementStarted && tr < resumeAt + 2500) {
+  tr += 33;
+  resumed = returned.push({ width: 1280, height: 720, ...withHands("behind") }, tr);
+}
+if (!resumed.movementStarted || resumed.state !== "ACTIVE") throw new Error(`measurement did not begin after the hands returned (${resumed.state})`);
 
 const oldFilter = new OneEuroFilter(1.2, 0.04);
 const newFilter = new OneEuroFilter(3, 0.35);

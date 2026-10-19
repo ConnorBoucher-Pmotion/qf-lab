@@ -15,6 +15,7 @@ type Props = {
   resetSignal: number;
   nextSignal: number;
   startSignal: number;
+  voiceSignal: number;
   acceptSignal: number;
   preRollMs: number;
   postRollMs: number;
@@ -23,7 +24,7 @@ type Props = {
   onRecorderStatus: (status: RecorderStatus) => void;
 };
 
-export function CameraView({ direction, config, resetSignal, nextSignal, startSignal, acceptSignal, preRollMs, postRollMs, onSnapshot, onRecording, onRecorderStatus }: Props) {
+export function CameraView({ direction, config, resetSignal, nextSignal, startSignal, voiceSignal, acceptSignal, preRollMs, postRollMs, onSnapshot, onRecording, onRecorderStatus }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onSnapshotRef = useRef(onSnapshot);
   const onRecordingRef = useRef(onRecording);
@@ -61,6 +62,10 @@ export function CameraView({ direction, config, resetSignal, nextSignal, startSi
     if (startSignal === 0) return;
     sessionRef.current?.arm(performance.now());
   }, [startSignal]);
+  useEffect(() => {
+    if (voiceSignal === 0) return;
+    sessionRef.current?.hearReady(performance.now());
+  }, [voiceSignal]);
   useEffect(() => {
     if (acceptSignal === 0) return;
     sessionRef.current?.acceptPeak();

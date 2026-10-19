@@ -135,6 +135,12 @@ export function presentedHand(world: Vec[]): boolean {
   });
 }
 
+/** True when both visible hands are behind the head. Unseen hands do not block the synthetic checks. */
+export function handsSettled(posture: HandPosture): boolean {
+  if (posture.handsVisible < 2 || posture.handsBehind == null) return true;
+  return posture.handsBehind >= 2;
+}
+
 export function postureChecks(posture: HandPosture, handsBlocking: boolean): ConstraintCheck[] {
   return [handsCheck(posture, "setup", handsBlocking), elbowsCheck(posture, handsBlocking)];
 }

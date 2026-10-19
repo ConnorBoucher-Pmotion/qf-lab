@@ -2,17 +2,22 @@ import type { TLSnapshot } from "../tl/tlTypes";
 
 export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) {
   const state = snapshot?.state ?? "SEARCHING";
+  const confirming = state === "READY" || state === "READY_CONFIRMING";
   const active = state === "ACTIVE" || state === "MEASURING" || state === "COUNTDOWN";
-  const meter = state === "CALIBRATING" || state === "STABLE" ? (snapshot?.calibrationProgress ?? 0) : active ? (snapshot?.holdProgress ?? 0) : 0;
+  const finished = state === "COMPLETE" && snapshot?.result?.accepted && snapshot.result.measuredRom != null;
+  const meter = state === "CALIBRATING" || state === "STABLE" ? (snapshot?.calibrationProgress ?? 0) : confirming ? (snapshot?.thumbProgress ?? 0) : active ? (snapshot?.holdProgress ?? 0) : finished ? 1 : 0;
   const side = snapshot?.direction === "left" ? "LEFT" : "RIGHT";
-  const kicker = state === "ACTIVE" || state === "MEASURING" ? `ROTATE ${side}` : `TL Junction · ${snapshot?.direction === "left" ? "Left" : "Right"} rotation`;
-  const live = snapshot?.countdownLabel ?? (snapshot?.rom.filtered != null ? Math.max(0, snapshot.rom.filtered).toFixed(1) : null);
+  const sideName = snapshot?.direction === "left" ? "Left" : "Right";
+  const kicker = finished ? `${sideName} TL Junction ROM` : state === "ACTIVE" || state === "MEASURING" ? `ROTATE ${side}` : confirming && snapshot?.canStart ? "Position looks good" : `TL Junction · ${sideName} rotation`;
+  const live = finished
+    ? snapshot?.result?.measuredRom?.toFixed(1)
+    : snapshot?.countdownLabel ?? (snapshot?.rom.filtered != null ? Math.max(0, snapshot.rom.filtered).toFixed(1) : null);
   const remain = snapshot?.captureRemainingMs;
   return (
     <section className="live-rom">
       <p className="kicker">{kicker}</p>
       <p className="angle">{live ?? "—.—"}</p>
-      <p className="angle-unit">{snapshot?.countdownLabel ? "get ready" : state === "ACTIVE" ? "live ROM, degrees" : snapshot?.calibrationComplete ? "torso relative to pelvis, degrees" : "live rotation, degrees"}</p>
+      <p className="angle-unit">{finished ? "saved degrees" : snapshot?.countdownLabel ? "get ready" : state === "ACTIVE" ? "live ROM, degrees" : confirming && snapshot?.canStart ? "hold thumbs up or say Ready" : snapshot?.calibrationComplete ? "torso relative to pelvis, degrees" : "live rotation, degrees"}</p>
       <div className="meter" aria-hidden="true">
         <span style={{ width: `${Math.round(meter * 100)}%` }} />
       </div>
@@ -50,7 +55,7 @@ export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) 
           <dd>{snapshot ? `${snapshot.quality}%` : "—"}</dd>
         </div>
       </dl>
-      <p className="quality-line">{state === "ACTIVE" ? "The saved result is the highest angle while movement stayed valid." : "The live number is not a saved result until the capture window starts."}</p>
+      <p className="quality-line">{finished ? "Assessment completed." : state === "ACTIVE" ? "The saved result is the highest angle while movement stayed valid." : confirming && snapshot?.thumbSeen ? "Ready gesture detected — keep holding." : "The live number is not a saved result until the capture window starts."}</p>
     </section>
   );
 }

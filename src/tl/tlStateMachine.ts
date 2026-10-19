@@ -2,7 +2,7 @@ import { dist3, median, midpoint, stdev } from "../pose/coordinateNormalization"
 import { PoseFilter } from "../pose/landmarkFiltering";
 import { OneEuroFilter } from "../pose/oneEuro";
 import { LM, type Vec } from "../pose/types";
-import { handPosture, postureChecks, presentedHand, setupChecks, trialChecks, grade } from "./tlCompensation";
+import { handPosture, handsSettled, postureChecks, presentedHand, setupChecks, trialChecks, grade } from "./tlCompensation";
 import { CAMERA_NOTE, type TLConfig } from "./tlConfig";
 import { trackingConfidence } from "./tlQuality";
 import {
@@ -112,7 +112,12 @@ export class TLSession {
   private countdownEndsAt: number | null = null;
   private rotateCueAt: number | null = null;
   private captureEndsAt: number | null = null;
+  private countdownSpan = 0;
   private thumbFor = 0;
+  private thumbSeen = false;
+  private readyOpen = false;
+  private voiceLatch = false;
+  private handsHold = false;
   private readyFailFor = 0;
   private activeFor = 0;
   private atValid: CompensationSnapshot | null = null;
@@ -151,16 +156,22 @@ export class TLSession {
 
   /** Manual start. Ignored until a neutral baseline exists. Does not record peaks during the countdown. */
   arm(now: number): void {
-    if (!this.baseline || this.result || this.movementStarted || this.countdownEndsAt != null) return;
-    if (this.state !== "READY") return;
+    if (!this.baseline || this.result || this.movementStarted || this.countdownEndsAt != null || this.handsHold) return;
+    if (this.state !== "READY" && this.state !== "READY_CONFIRMING") return;
+    this.voiceLatch = true;
     if (this.config.countdownMs <= 0 || this.config.romTestMode) {
       this.beginMeasuring(now);
       return;
     }
-    this.rotateCueAt = now + this.config.countdownMs;
-    this.countdownEndsAt = now + this.config.countdownMs + 400;
-    this.state = "COUNTDOWN";
-    this.note("Countdown started", now);
+    this.startCountdown(now, this.config.countdownMs);
+  }
+
+  /** Spoken "ready". Same countdown as a finished thumbs-up, without the 2 second hold. */
+  hearReady(now: number): void {
+    if (this.voiceLatch || !this.readyOpen) return;
+    if (this.state !== "READY" && this.state !== "READY_CONFIRMING") return;
+    this.note("Voice ready", now);
+    this.arm(now);
   }
 
   /** Development override. Stores the current peaks without waiting for the hold. */
@@ -210,9 +221,9 @@ export class TLSession {
     this.clearAttempt();
   }
 
-  /** True while a thumbs-up can start the countdown. */
+  /** True while a thumbs-up can fill the readiness hold. */
   wantsThumb(): boolean {
-    return this.state === "READY" && this.baseline != null && !this.movementStarted && this.result == null;
+    return (this.state === "READY" || this.state === "READY_CONFIRMING") && this.baseline != null && !this.movementStarted && this.result == null;
   }
 
   push(frame: { width: number; height: number; image: Vec[]; world: Vec[]; thumbUp?: boolean; gestureReady?: boolean }, now: number): TLSnapshot {
@@ -250,7 +261,7 @@ export class TLSession {
     const hardNow = this.movementStarted && checks.some((check) => check.category === "hard" && check.status === "fail");
     const hardFailed = hardNow && this.failFor >= this.config.hardFailPersistMs;
     const thumbUp = frame.thumbUp === true || (frame.gestureReady === false && presentedHand(world));
-    this.advance({ now, dt, current, raw: directionalRom(smoothed.raw, this.direction), velocity, tracking, setup, hardFailed, hardNow, metrics, image, world, reading, thumbUp });
+    this.advance({ now, dt, current, raw: directionalRom(smoothed.raw, this.direction), velocity, tracking, setup, hardFailed, hardNow, metrics, image, world, reading, thumbUp, posture });
     this.blockedBy = this.explain(setup, tracking, current);
     const measuring = this.state === "ACTIVE" || this.state === "MEASURING" || this.state === "PEAK" || this.state === "HOLD" || this.state === "TRACKING_LOST";
     const failing = checks.find((check) => check.category === "hard" && check.status === "fail");
@@ -270,6 +281,8 @@ export class TLSession {
       romTestMode: this.config.romTestMode,
       captureRemainingMs: this.captureEndsAt == null ? null : Math.max(0, this.captureEndsAt - now),
       thumbProgress: this.config.thumbStableMs <= 0 ? 0 : Math.max(0, Math.min(1, this.thumbFor / this.config.thumbStableMs)),
+      thumbSeen: this.thumbSeen,
+      canStart: this.readyOpen,
       movementMessage: !this.movementStarted ? "" : hardFailed && failing ? failing.message : hardNow && failing ? `${failing.label} — confirming` : "Movement valid",
       rawShoulderYawDeg: reading?.shoulderYawDeg ?? null,
       rawPelvisYawDeg: reading?.pelvisYawDeg ?? null,
@@ -294,7 +307,7 @@ export class TLSession {
       calibrationProgress: this.calibrationProgress(now),
       baselineReady: this.baseline != null,
       calibrationComplete: this.baseline != null,
-      assessmentArmed: this.baseline != null && this.result == null && (this.state === "READY" || measuring),
+      assessmentArmed: this.baseline != null && this.result == null && (this.state === "READY" || this.state === "READY_CONFIRMING" || measuring),
       movementStarted: this.movementStarted,
       blockedBy: this.blockedBy,
       movementStartFrames: this.confirmFrames,
@@ -329,9 +342,10 @@ export class TLSession {
     world: Vec[];
     reading: RotationReading | null;
     thumbUp: boolean;
+    posture: ReturnType<typeof handPosture>;
   }): void {
     if (this.result && (this.state === "COMPLETE" || this.state === "INVALID")) return;
-    const { now, dt, current, raw, tracking, setup, hardFailed, metrics, image, world, reading, thumbUp } = input;
+    const { now, dt, current, raw, tracking, setup, hardFailed, metrics, image, world, reading, thumbUp, posture } = input;
     if (!tracking.present) {
       this.state = "SEARCHING";
       if (!this.config.romTestMode && this.weakFor > this.config.trackingResetMs) {
@@ -363,24 +377,51 @@ export class TLSession {
     if (this.countdownEndsAt != null) {
       if (now < this.countdownEndsAt) {
         this.state = "COUNTDOWN";
+        this.readyOpen = false;
+        this.thumbSeen = false;
         return;
       }
+      if (!handsSettled(posture)) {
+        this.countdownEndsAt = null;
+        this.rotateCueAt = null;
+        this.handsHold = true;
+        this.state = "COUNTDOWN";
+        this.readyOpen = false;
+        this.thumbSeen = false;
+        return;
+      }
+      this.handsHold = false;
       this.beginMeasuring(now);
+      return;
+    }
+    if (this.handsHold) {
+      this.readyOpen = false;
+      this.thumbSeen = false;
+      this.state = "COUNTDOWN";
+      if (!handsSettled(posture)) return;
+      this.handsHold = false;
+      this.note("Hands back", now);
+      this.startCountdown(now, Math.min(1500, this.config.countdownMs || 1500));
       return;
     }
     if (!this.movementStarted) {
       const blocked = setup.some((check) => check.blocking && (check.status === "fail" || check.status === "na"));
       this.readyFailFor = blocked ? this.readyFailFor + dt : 0;
-      this.thumbFor = !blocked && thumbUp ? this.thumbFor + dt : 0;
+      this.readyOpen = !blocked;
+      this.thumbSeen = !blocked && thumbUp;
+      if (!blocked && thumbUp) this.thumbFor = Math.min(this.config.thumbStableMs, this.thumbFor + dt);
+      else this.thumbFor = Math.max(0, this.thumbFor - dt * 3);
       if (blocked && this.readyFailFor > 700) {
         this.baseline = null;
         this.thumbFor = 0;
         this.readyFailFor = 0;
+        this.readyOpen = false;
+        this.thumbSeen = false;
         this.state = "POSITIONING";
         return;
       }
-      this.state = "READY";
-      if (!blocked && this.thumbFor >= this.config.thumbStableMs) {
+      this.state = !blocked && thumbUp && this.thumbFor > 0 ? "READY_CONFIRMING" : "READY";
+      if (!blocked && thumbUp && this.thumbFor >= this.config.thumbStableMs) {
         this.note("Thumbs up", now);
         this.arm(now);
       }
@@ -451,11 +492,31 @@ export class TLSession {
     else this.state = "READY";
   }
 
+  private startCountdown(now: number, span: number): void {
+    const length = Math.max(0, span);
+    this.countdownSpan = length;
+    this.thumbFor = 0;
+    this.thumbSeen = false;
+    this.readyOpen = false;
+    this.handsHold = false;
+    if (length <= 0) {
+      this.beginMeasuring(now);
+      return;
+    }
+    this.rotateCueAt = now + length;
+    this.countdownEndsAt = now + length + 400;
+    this.state = "COUNTDOWN";
+    this.note("Countdown started", now);
+  }
+
   private beginMeasuring(now: number): void {
     this.countdownEndsAt = null;
     this.rotateCueAt = null;
     this.captureEndsAt = this.config.romTestMode ? null : now + this.config.captureWindowMs;
     this.thumbFor = 0;
+    this.thumbSeen = false;
+    this.readyOpen = false;
+    this.handsHold = false;
     this.movementStarted = true;
     this.rotationStartedAt = now;
     this.activeFor = 0;
@@ -525,7 +586,7 @@ export class TLSession {
   private setup(image: Vec[], width: number, height: number, reading: ReturnType<typeof readRotation> | null, metrics: TLMetrics, facing: CameraFacing, posture: ReturnType<typeof handPosture>): ConstraintCheck[] {
     const upright = maxAbs(metrics.lateralLeanDeg, metrics.forwardLeanDeg);
     const square = reading?.torsoPelvisDeg == null ? null : Math.abs(reading.torsoPelvisDeg);
-    const handsBlocking = this.state !== "READY";
+    const handsBlocking = this.state !== "READY" && this.state !== "READY_CONFIRMING" && this.state !== "COUNTDOWN";
     return [...setupChecks({ ...blankComp(), facingYawDeg: facing.scoreDeg, uprightDeg: upright, squareDeg: square, lateralLeanDeg: metrics.lateralLeanDeg, forwardLeanDeg: metrics.forwardLeanDeg }, this.config, facing), ...postureChecks(posture, handsBlocking), ...framingChecks(image, width, height)];
   }
 
@@ -716,9 +777,9 @@ export class TLSession {
   }
 
   private countdownLabel(now: number): string | null {
-    if (this.countdownEndsAt == null || this.rotateCueAt == null || now >= this.countdownEndsAt) return null;
+    if (this.handsHold || this.countdownEndsAt == null || this.rotateCueAt == null || now >= this.countdownEndsAt) return null;
     if (now >= this.rotateCueAt) return this.direction === "left" ? "ROTATE LEFT" : "ROTATE RIGHT";
-    const third = this.config.countdownMs / 3;
+    const third = this.countdownSpan / 3;
     const remain = this.rotateCueAt - now;
     if (third <= 0) return "1";
     if (remain > third * 2) return "3";
@@ -755,13 +816,14 @@ export class TLSession {
     }
     if (this.state === "STABLE") return `Hold still. Neutral calibration starts in ${Math.max(0, Math.round(this.config.stableMs - this.stableFor))} ms.`;
     if (this.state === "CALIBRATING") return `Capturing a new neutral. ${this.calib.length}/${this.config.minCalibrationFrames} frames.`;
-    if (this.state === "READY") {
+    if (this.state === "READY" || this.state === "READY_CONFIRMING") {
       const blocked = setup.find((check) => check.blocking && (check.status === "fail" || check.status === "na"));
       if (blocked) return blocked.message;
-      const held = Math.round(this.thumbFor);
-      return held > 0 ? `Thumbs up held ${held}/${this.config.thumbStableMs} ms.` : "Position looks good. Give a thumbs up when you're ready.";
+      if (this.thumbSeen) return `Thumbs up held ${Math.round(this.thumbFor)}/${this.config.thumbStableMs} ms.`;
+      return "Position looks good. Hold a thumbs up for 2 seconds, or say Ready.";
     }
-    if (this.state === "COUNTDOWN") return "Countdown. The capture window starts when it says rotate.";
+    if (this.handsHold) return "Return both hands behind your head before the rotation starts.";
+    if (this.state === "COUNTDOWN") return "Countdown. Put both hands behind your head. The capture window starts when it says rotate.";
     if (this.state === "ACTIVE" || this.state === "MEASURING") {
       const remain = this.captureEndsAt == null ? null : Math.max(0, this.captureEndsAt - (this.lastT ?? 0));
       const left = remain == null ? "" : ` ${Math.ceil(remain / 100) / 10} s left.`;
@@ -774,11 +836,17 @@ export class TLSession {
   }
 
   private instruction(setup: ConstraintCheck[], tracking: TrackingStatus): string {
-    if (this.state === "COMPLETE") return this.result?.accepted ? "Best rotation saved. Return to the middle, then start the next trial." : (this.result?.instruction ?? "Assessment stopped.");
+    if (this.state === "COMPLETE") {
+      const rom = this.result?.measuredRom;
+      const side = this.direction === "left" ? "Left" : "Right";
+      return this.result?.accepted && rom != null ? `${side} TL Junction ROM ${rom.toFixed(1)}°.` : (this.result?.instruction ?? "Assessment stopped.");
+    }
     if (this.state === "INVALID") return this.result?.instruction ?? "Assessment stopped.";
     if (this.state === "TRACKING_LOST" || !tracking.present) return "Tracking lost. Sit so both shoulders, both hips, and both knees are visible.";
-    if (this.state === "READY") return "Position looks good. Give a thumbs up when you're ready.";
-    if (this.state === "COUNTDOWN") return this.countdownLabel(this.lastT ?? 0) ?? "Get ready.";
+    if (this.handsHold) return "Return both hands behind your head.";
+    if (this.state === "READY") return "Position looks good. Hold 👍 for 2 seconds or say \"Ready\".";
+    if (this.state === "READY_CONFIRMING") return "👍 Ready gesture detected — keep holding.";
+    if (this.state === "COUNTDOWN") return "Ready! Get both hands behind your head.";
     if (this.state === "ACTIVE" || this.state === "MEASURING") return this.direction === "left" ? "ROTATE LEFT" : "ROTATE RIGHT";
     if (this.state === "PEAK" || this.state === "HOLD") return "Hold your maximum position until the bar fills.";
     if (this.state === "CALIBRATING") return "Hold the neutral position. Face forward, sit tall, and keep the knees still.";
@@ -817,7 +885,12 @@ export class TLSession {
     this.countdownEndsAt = null;
     this.rotateCueAt = null;
     this.captureEndsAt = null;
+    this.countdownSpan = 0;
     this.thumbFor = 0;
+    this.thumbSeen = false;
+    this.readyOpen = false;
+    this.voiceLatch = false;
+    this.handsHold = false;
     this.readyFailFor = 0;
     this.activeFor = 0;
     this.algoPeaks = emptyAlgoPeaks();

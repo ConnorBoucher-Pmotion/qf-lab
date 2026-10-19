@@ -89,6 +89,14 @@ h1, h2 { font-size: 1rem; margin: 0; font-weight: 650; white-space: nowrap; }
   text-shadow: 0 0 18px #000;
 }
 
+.ready-card { margin-top: 0.45rem; }
+.ready-title { margin: 0 0 0.15rem; font-size: 1.05rem; font-weight: 700; }
+.ready-card p { margin: 0.12rem 0; }
+.thumb-meter { height: 0.6rem; margin: 0.4rem 0 0.15rem; background: #243044; border-radius: 999px; overflow: hidden; }
+.thumb-meter span { display: block; height: 100%; background: #7dffb3; }
+.thumb-percent { font-variant-numeric: tabular-nums; }
+.mic-note { color: #f0d48a; font-size: 0.85rem; }
+
 .start-row {
   display: flex;
   flex-wrap: wrap;
