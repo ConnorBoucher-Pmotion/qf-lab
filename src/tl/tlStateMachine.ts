@@ -247,36 +247,40 @@ export class TLSession {
     this.frameTimes.push(now);
     this.frameTimes = this.frameTimes.filter((t) => now - t < 1000);
     const filtered = frame.world.length >= 33 && frame.image.length >= 33 ? this.poseFilter.apply(frame.image, frame.world, now) : null;
-    const image = filtered?.gatedImage ?? [];
-    const world = filtered?.gatedWorld ?? [];
+    const gatedImage = filtered?.gatedImage ?? [];
+    const gatedWorld = filtered?.gatedWorld ?? [];
     const smoothedImage = filtered?.image ?? [];
     const smoothedWorld = filtered?.world ?? [];
-    const tracking = this.tracking(world, dt);
-    const reading = world.length >= 33 ? readRotation(world, image, this.baseline?.yaws ?? null) : null;
+    // Raw ROM uses ungated MediaPipe landmarks only. Gating / hold / confidence must not change it.
+    const rawReading = frame.world.length >= 33 ? readRotation(frame.world, frame.image, this.baseline?.yaws ?? null) : null;
+    const gatedReading = gatedWorld.length >= 33 ? readRotation(gatedWorld, gatedImage, this.baseline?.yaws ?? null) : null;
     const smoothedReading = smoothedWorld.length >= 33 ? readRotation(smoothedWorld, smoothedImage, this.baseline?.yaws ?? null) : null;
-    const signedRaw = reading?.torsoPelvisDeg ?? null;
-    const signedSmoothed = smoothedReading ? primaryAngle(smoothedReading, this.config.algorithm) : null;
-    const smoothed = tracking.present ? this.smooth(signedRaw, now) : { raw: signedRaw, filtered: this.lastFiltered };
-    const rawRom = directionalRom(smoothed.raw, this.direction);
-    const current = directionalRom(smoothed.filtered, this.direction);
+    const tracking = this.tracking(frame.world, dt);
+    const signedRaw = rawReading?.torsoPelvisDeg ?? null;
+    const signedSmoothed = smoothedReading?.torsoPelvisDeg ?? null;
+    const angleSmooth = tracking.present ? this.smooth(signedRaw, now) : { raw: signedRaw, filtered: this.lastFiltered };
+    const rawRom = directionalRom(signedRaw, this.direction);
+    const current = directionalRom(angleSmooth.filtered, this.direction);
+    const gatedRom = directionalRom(gatedReading?.torsoPelvisDeg ?? null, this.direction);
+    const shoulderMinusPelvis = directionalRom(rawReading?.legacyDeg ?? null, this.direction);
     const velocity = this.velocity(current, dt);
-    const metrics = this.metrics(world, image, reading, velocity, tracking);
-    const measured = cameraFacing(world);
+    const metrics = this.metrics(frame.world, frame.image, rawReading, velocity, tracking);
+    const measured = cameraFacing(frame.world);
     const facing: CameraFacing = {
       ...measured,
       warnDeg: this.config.setupFacingWarnDeg,
       failDeg: this.config.setupFacingFailDeg,
       status: grade(measured.scoreDeg, this.config.setupFacingWarnDeg, this.config.setupFacingFailDeg),
     };
-    const posture = handPosture(world);
-    const setup = this.setup(image, frame.width, frame.height, reading, metrics, facing, posture);
+    const posture = handPosture(frame.world);
+    const setup = this.setup(frame.image, frame.width, frame.height, rawReading, metrics, facing, posture);
     const checks = this.baseline ? trialChecks(this.compInput(metrics), this.config, posture) : [];
     this.observeChecks(checks, now);
     const movementHard = this.movementStarted && checks.some((check) => check.category === "hard" && check.status === "fail" && check.id !== "hands-behind");
     if (this.movementStarted) this.failFor = movementHard ? this.failFor + dt : 0;
     else this.failFor = 0;
     const hardFailed = movementHard && this.failFor >= this.config.hardFailPersistMs;
-    const vis = landmarkVis(world);
+    const vis = landmarkVis(frame.world);
     const soft = Math.max(0.12, this.config.landmarkConfidence * 0.45);
     this.farLowFor = vis.farShoulder < soft ? this.farLowFor + dt : 0;
     const spike = this.movementStarted && rawRom != null && isAngleSpike(this.lastSpikeRom, rawRom, dt, this.config.maxAngleJumpDeg, this.config.maxAngularVelocityDegPerSec);
@@ -290,7 +294,7 @@ export class TLSession {
       hardPersistFailed: hardFailed,
     });
     if (acceptance.occlusion === "expected-far-shoulder" || acceptance.occlusion === "prolonged") this.occlusionSeen = true;
-    const thumbUp = frame.thumbUp === true || (frame.gestureReady === false && presentedHand(world));
+    const thumbUp = frame.thumbUp === true || (frame.gestureReady === false && presentedHand(frame.world));
     this.advance({
       now,
       dt,
@@ -302,16 +306,17 @@ export class TLSession {
       hardFailed,
       hardNow: movementHard,
       metrics,
-      image,
-      world,
-      reading,
+      image: frame.image,
+      world: frame.world,
+      reading: rawReading,
       thumbUp,
       posture,
       acceptance,
     });
     this.blockedBy = this.explain(setup, tracking, current);
     const measuring = this.state === "ACTIVE" || this.state === "MEASURING" || this.state === "PEAK" || this.state === "HOLD" || this.state === "TRACKING_LOST";
-    const depthRom = reading?.depthWidthDeg == null ? null : directionalRom(reading.depthWidthDeg, this.direction);
+    const depthRom = rawReading?.depthWidthDeg == null ? null : directionalRom(rawReading.depthWidthDeg, this.direction);
+    const baselineRelative = this.baseline?.yaws.relativeYawDeg ?? null;
 
     return {
       state: this.state,
@@ -319,12 +324,12 @@ export class TLSession {
       direction: this.direction,
       algorithm: this.config.algorithm,
       countdownLabel: this.countdownLabel(now),
-      algorithmsLive: this.algorithmRows(reading),
+      algorithmsLive: this.algorithmRows(rawReading),
       neutralShoulderYawDeg: this.baseline?.yaws.shoulderYawDeg ?? null,
       neutralPelvisYawDeg: this.baseline?.yaws.pelvisYawDeg ?? null,
-      shoulderSpanRatio: reading?.shoulderSpanRatio ?? null,
-      imageWidthDeg: reading?.imageWidthDeg ?? null,
-      imageShoulderYawDeg: reading?.imageShoulderYawDeg ?? null,
+      shoulderSpanRatio: rawReading?.shoulderSpanRatio ?? null,
+      imageWidthDeg: rawReading?.imageWidthDeg ?? null,
+      imageShoulderYawDeg: rawReading?.imageShoulderYawDeg ?? null,
       romTestMode: this.config.romTestMode,
       captureRemainingMs: this.captureEndsAt == null ? null : Math.max(0, this.captureEndsAt - now),
       thumbProgress: this.config.thumbStableMs <= 0 ? 0 : Math.max(0, Math.min(1, this.thumbFor / this.config.thumbStableMs)),
@@ -348,8 +353,12 @@ export class TLSession {
       leftHipVisibility: vis.leftHip,
       rightHipVisibility: vis.rightHip,
       depthAssistedRom: depthRom,
-      rawShoulderYawDeg: reading?.shoulderYawDeg ?? null,
-      rawPelvisYawDeg: reading?.pelvisYawDeg ?? null,
+      gatedRom,
+      shoulderMinusPelvisRom: shoulderMinusPelvis,
+      relativeRotationDeg: rawReading?.torsoPelvisDeg ?? null,
+      baselineRelativeDeg: baselineRelative,
+      rawShoulderYawDeg: rawReading?.shoulderYawDeg ?? null,
+      rawPelvisYawDeg: rawReading?.pelvisYawDeg ?? null,
       smoothedShoulderYawDeg: smoothedReading?.shoulderYawDeg ?? null,
       smoothedPelvisYawDeg: smoothedReading?.pelvisYawDeg ?? null,
       metrics,
@@ -358,11 +367,11 @@ export class TLSession {
       checks,
       cameraFacing: facing,
       rom: {
-        current,
-        raw: smoothed.raw == null ? null : directionalRom(smoothed.raw, this.direction),
+        current: rawRom,
+        raw: rawRom,
         landmarkSmoothed: signedSmoothed == null ? null : directionalRom(signedSmoothed, this.direction),
         filtered: current,
-        active: !this.movementStarted ? null : this.result ? this.validPeak : current,
+        active: !this.movementStarted ? null : this.result ? this.validPeak : rawRom,
         validPeak: this.movementStarted ? this.validPeak : null,
         rawPeak: this.movementStarted ? this.rawPeak : null,
         filteredPeak: this.movementStarted ? this.filteredPeak : null,
@@ -383,9 +392,9 @@ export class TLSession {
       quality: Math.round(acceptance.score * 100) || trackingConfidence(tracking.score, checks.filter((check) => check.status === "warn").length, hardFailed ? 1 : 0, false),
       result: this.result,
       events: this.bakedEvents(),
-      imagePose: smoothedImage.length >= 33 ? smoothedImage : image,
+      imagePose: smoothedImage.length >= 33 ? smoothedImage : frame.image,
       rawPose: frame.image,
-      reference: this.referenceLine(image),
+      reference: this.referenceLine(frame.image),
       fps: this.frameTimes.length,
       cameraNote: CAMERA_NOTE,
     };
@@ -529,16 +538,17 @@ export class TLSession {
     const sample = raw ?? current;
     if (sample == null) return;
     if (!spiked) this.lastSpikeRom = sample;
-    if (acceptance.acceptPeak) {
-      if (this.validPeak == null || sample > this.validPeak) {
-        this.validPeak = sample;
+    // Accepted peaks come from Raw ROM only. Confidence decides trust, not a different angle.
+    if (acceptance.acceptPeak && raw != null) {
+      if (this.validPeak == null || raw > this.validPeak) {
+        this.validPeak = raw;
         this.atValid = compOf(metrics);
       }
       this.candidate = null;
       return;
     }
-    if (acceptance.candidateOnly) {
-      const next = updateCandidate(this.candidate, sample, now, 450, 2.5);
+    if (acceptance.candidateOnly && raw != null) {
+      const next = updateCandidate(this.candidate, raw, now, 450, 2.5);
       this.candidate = next.candidate;
       if (next.promoted != null && (this.validPeak == null || next.promoted > this.validPeak)) {
         this.validPeak = next.promoted;

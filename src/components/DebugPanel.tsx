@@ -68,13 +68,22 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Algorithm" value={snapshot ? ALGORITHM_INFO[snapshot.algorithm].label : "—"} />
               <Item label="Frame rate" value={snapshot ? String(snapshot.fps) : "—"} />
               <Item label="Record" value={recorder ? `${recorder.phase} · pose ${recorder.poseFps} · video ${recorder.recordFps}` : "—"} />
-              <Item label="RAW ROM" value={deg(snapshot?.rom.raw)} />
+              <Item label="RAW ROM (ungated)" value={deg(snapshot?.rom.raw)} />
               <Item label="SMOOTHED ROM" value={deg(snapshot?.rom.filtered)} />
-              <Item label="ACCEPTED ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : snapshot?.rom.filtered)} />
+              <Item label="ACCEPTED ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
               <Item label="MAX ACCEPTED ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
+              <Item label="Gated ROM (diagnostic)" value={deg(snapshot?.gatedRom)} />
+              <Item label="Shoulder−pelvis ROM" value={deg(snapshot?.shoulderMinusPelvisRom)} />
+              <Item label="Depth-assisted ROM" value={deg(snapshot?.depthAssistedRom)} />
               <Item label="Landmark-smoothed rotation" value={deg(snapshot?.rom.landmarkSmoothed)} />
               <Item label="Raw peak" value={deg(snapshot?.movementStarted ? snapshot.rom.rawPeak : null)} />
-              <Item label="Filtered peak" value={deg(snapshot?.movementStarted ? snapshot.rom.filteredPeak : null)} />
+              <Item label="Smoothed peak" value={deg(snapshot?.movementStarted ? snapshot.rom.filteredPeak : null)} />
+              <Item label="Shoulder axis angle" value={deg(snapshot?.rawShoulderYawDeg)} />
+              <Item label="Pelvis axis angle" value={deg(snapshot?.rawPelvisYawDeg)} />
+              <Item label="Relative rotation" value={deg(snapshot?.relativeRotationDeg)} />
+              <Item label="Baseline relative" value={deg(snapshot?.baselineRelativeDeg)} />
+              <Item label="Baseline shoulder yaw" value={deg(snapshot?.neutralShoulderYawDeg)} />
+              <Item label="Baseline pelvis yaw" value={deg(snapshot?.neutralPelvisYawDeg)} />
               <Item label="MOVEMENT VALIDITY" value={snapshot?.movementStarted ? (snapshot.movementValid ? "PASS" : "FAIL") : "—"} />
               <Item label="TRACKING CONFIDENCE" value={snapshot ? `${snapshot.trackingBand.toUpperCase()} (${snapshot.trackingScore}%)` : "—"} />
               <Item label="Occlusion state" value={snapshot?.occlusionLabel ?? "—"} />
@@ -83,17 +92,9 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Right shoulder visibility" value={num(snapshot?.rightShoulderVisibility)} />
               <Item label="Left hip visibility" value={num(snapshot?.leftHipVisibility)} />
               <Item label="Right hip visibility" value={num(snapshot?.rightHipVisibility)} />
-              <Item label="World-axis ROM (C)" value={deg(metrics?.algorithms.torsoPelvis)} />
-              <Item label="Depth-assisted ROM (D)" value={deg(snapshot?.depthAssistedRom)} />
               <Item label="Camera offset guide" value={snapshot ? `${config.cameraGuideOffsetDeg}°` : "—"} />
-              <Item label="Raw shoulder yaw" value={deg(snapshot?.rawShoulderYawDeg)} />
               <Item label="Smoothed shoulder yaw" value={deg(snapshot?.smoothedShoulderYawDeg)} />
-              <Item label="Raw pelvis yaw" value={deg(snapshot?.rawPelvisYawDeg)} />
               <Item label="Smoothed pelvis yaw" value={deg(snapshot?.smoothedPelvisYawDeg)} />
-              <Item label="Relative torso / pelvis" value={deg(snapshot?.rom.filtered)} />
-              <Item label="Baseline shoulder yaw" value={deg(snapshot?.neutralShoulderYawDeg)} />
-              <Item label="Baseline pelvis yaw" value={deg(snapshot?.neutralPelvisYawDeg)} />
-              <Item label="Max valid ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
               <Item label="Time left" value={snapshot?.captureRemainingMs == null ? "—" : `${Math.round(snapshot.captureRemainingMs)} ms`} />
               <Item label="Thumbs-up progress" value={snapshot ? `${Math.round(snapshot.thumbProgress * 100)}%` : "—"} />
               <Item label="Movement" value={snapshot?.movementMessage || "—"} />
@@ -101,8 +102,6 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Image shoulder yaw" value={deg(snapshot?.imageShoulderYawDeg)} />
               <Item label="Image width yaw" value={deg(snapshot?.imageWidthDeg)} />
               <Item label="Velocity" value={metrics?.velocityDegPerSec == null ? "—" : `${metrics.velocityDegPerSec.toFixed(1)} °/s`} />
-              <Item label="Shoulder yaw" value={deg(metrics?.shoulderYawDeg)} />
-              <Item label="Pelvis yaw" value={deg(metrics?.pelvisYawDeg)} />
               <Item label="Face camera score" value={deg(snapshot?.cameraFacing.scoreDeg)} />
               <Item label="Face camera status" value={snapshot?.cameraFacing.status ?? "—"} />
               <Item label="Shoulder axis off camera" value={deg(snapshot?.cameraFacing.shoulderYawDeg)} />

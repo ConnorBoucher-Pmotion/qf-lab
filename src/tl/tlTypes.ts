@@ -151,6 +151,12 @@ export type TLSnapshot = {
   leftHipVisibility: number;
   rightHipVisibility: number;
   depthAssistedRom: number | null;
+  /** Same formula as Raw, but from spike-gated landmarks. Diagnostic only. */
+  gatedRom: number | null;
+  /** Shoulder yaw minus pelvis yaw from ungated landmarks (legacy path). */
+  shoulderMinusPelvisRom: number | null;
+  relativeRotationDeg: number | null;
+  baselineRelativeDeg: number | null;
   rawShoulderYawDeg: number | null;
   rawPelvisYawDeg: number | null;
   smoothedShoulderYawDeg: number | null;
@@ -164,10 +170,11 @@ export type TLSnapshot = {
   rom: {
     /** Live rotation from the calibrated neutral. Updates whenever landmarks are present. Not a trial result. */
     current: number | null;
-    /** Selected algorithm, spike-gated landmarks, no angle smoothing. */
+    /** Ungated MediaPipe world landmarks, torso vs pelvis, no angle smoothing. */
     raw: number | null;
     /** Same angle after the landmark smoother, before the angle smoother. */
     landmarkSmoothed: number | null;
+    /** Light angle smoothing of Raw. Not a different geometry formula. */
     filtered: number | null;
     /** Trial ROM. Empty until ROTATE. */
     active: number | null;
