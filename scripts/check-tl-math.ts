@@ -414,35 +414,75 @@ const spikeCand = updateCandidate(null, 61, 0, 450, 2.5);
 const spikeCand2 = updateCandidate(spikeCand.candidate, 34, 40, 450, 2.5);
 if (spikeCand2.promoted != null) throw new Error("a lone 61° candidate was promoted");
 
+// RIGHT rotation: LEFT is the anchor; RIGHT may occlude (expected).
 const occluded = new TLSession(normalizeConfig({ ...fast, captureWindowMs: 5000, occlusionHoldMs: 700 }), "right");
 let to = feed(occluded, syntheticSeated(), 40, 0);
 occluded.arm(to);
 to += 33;
-to = feed(occluded, syntheticSeated({ shoulderYawDeg: 28, pelvisYawDeg: 1 }), 8, to);
+// Climb with both shoulders visible so assist has reliable span + angular velocity.
+for (let i = 0; i < 12; i += 1) {
+  occluded.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 18 + i * 1.2, pelvisYawDeg: 1 }) }, to);
+  to += 33;
+}
+const beforeOcclusion = occluded.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 32, pelvisYawDeg: 1 }) }, to);
+to += 33;
+const peakBefore = beforeOcclusion.rom.rawPeak ?? 0;
 for (let i = 0; i < 16; i += 1) {
-  const pose = syntheticSeated({ shoulderYawDeg: 30 + i * 0.4, pelvisYawDeg: 1 });
-  pose.world[LM.leftShoulder] = { ...pose.world[LM.leftShoulder], visibility: 0.16 };
-  pose.image[LM.leftShoulder] = { ...pose.image[LM.leftShoulder], visibility: 0.16 };
+  const pose = syntheticSeated({ shoulderYawDeg: 33 + i * 0.4, pelvisYawDeg: 1 });
+  // Simulate unreliable occluded landmark: freeze RIGHT at the pre-occlusion pose.
+  const frozen = syntheticSeated({ shoulderYawDeg: 32, pelvisYawDeg: 1 });
+  pose.world[LM.rightShoulder] = { ...frozen.world[LM.rightShoulder], visibility: 0.14 };
+  pose.image[LM.rightShoulder] = { ...frozen.image[LM.rightShoulder], visibility: 0.14 };
   occluded.push({ width: 1280, height: 720, ...pose }, to);
   to += 33;
 }
-const duringOcclusion = occluded.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 36, pelvisYawDeg: 1 }) }, to);
+const stillOccluded = syntheticSeated({ shoulderYawDeg: 38, pelvisYawDeg: 1 });
+const frozenRight = syntheticSeated({ shoulderYawDeg: 32, pelvisYawDeg: 1 });
+stillOccluded.world[LM.rightShoulder] = { ...frozenRight.world[LM.rightShoulder], visibility: 0.12 };
+stillOccluded.image[LM.rightShoulder] = { ...frozenRight.image[LM.rightShoulder], visibility: 0.12 };
+const duringOcclusion = occluded.push({ width: 1280, height: 720, ...stillOccluded }, to);
 if (duringOcclusion.state === "TRACKING_LOST") throw new Error("expected far-shoulder occlusion ended tracking");
-if ((duringOcclusion.rom.validPeak ?? 0) < 28) throw new Error(`occlusion froze the accepted peak at ${duringOcclusion.rom.validPeak}`);
+if ((duringOcclusion.rom.validPeak ?? 0) < 24) throw new Error(`occlusion froze the accepted peak at ${duringOcclusion.rom.validPeak}`);
+if ((duringOcclusion.rom.rawPeak ?? 0) < peakBefore - 1) {
+  throw new Error(`assisted Raw peak regressed from ${peakBefore} to ${duringOcclusion.rom.rawPeak}`);
+}
 if (duringOcclusion.trackingBand === "invalid") throw new Error(`occlusion was treated as invalid (${duringOcclusion.occlusionState})`);
+if (duringOcclusion.anchorShoulder !== "left" || duringOcclusion.occludedShoulder !== "right") {
+  throw new Error(`RIGHT rotation mapped anchor=${duringOcclusion.anchorShoulder} occluded=${duringOcclusion.occludedShoulder}`);
+}
+if (duringOcclusion.trackingMode !== "SINGLE_SHOULDER_ASSISTED") {
+  throw new Error(`expected SINGLE_SHOULDER_ASSISTED during RIGHT occluded shoulder, got ${duringOcclusion.trackingMode}`);
+}
+if (!duringOcclusion.movementValid) throw new Error("expected occlusion should keep movement validity PASS");
+const rolesRight = landmarkVis(syntheticSeated().world, "right");
+if (rolesRight.anchorSide !== "left" || rolesRight.occludedSide !== "right") throw new Error("landmarkVis right mapping failed");
+const rolesLeft = landmarkVis(syntheticSeated().world, "left");
+if (rolesLeft.anchorSide !== "right" || rolesLeft.occludedSide !== "left") throw new Error("landmarkVis left mapping failed");
 const scored = evaluateAcceptance({
   checks: [],
-  vis: { leftShoulder: 0.16, rightShoulder: 0.92, leftHip: 0.9, rightHip: 0.9, nearShoulder: 0.92, farShoulder: 0.16 },
+  vis: {
+    leftShoulder: 0.92,
+    rightShoulder: 0.16,
+    leftHip: 0.9,
+    rightHip: 0.9,
+    anchorShoulder: 0.92,
+    occludedShoulder: 0.16,
+    anchorSide: "left",
+    occludedSide: "right",
+  },
   config: normalizeConfig({ ...fast, occlusionHoldMs: 700 }),
   farLowForMs: 200,
   direction: "right",
   spike: false,
   hardPersistFailed: false,
+  mode: "SINGLE_SHOULDER_ASSISTED",
 });
 if (scored.band === "invalid" || (!scored.acceptPeak && !scored.candidateOnly)) {
   throw new Error(`far-shoulder dimming scored ${scored.band}`);
 }
-void landmarkVis;
+if (scored.occlusion !== "expected-far-shoulder" && scored.occlusion !== "none") {
+  throw new Error(`RIGHT occluded shoulder should be expected occlusion, got ${scored.occlusion}`);
+}
 
 const oldFilter = new OneEuroFilter(1.2, 0.04);
 const newFilter = new OneEuroFilter(3, 0.35);

@@ -146,6 +146,11 @@ export type TLSnapshot = {
   occlusionState: "none" | "expected-far-shoulder" | "prolonged" | "lost";
   occlusionLabel: string;
   rejectReason: string;
+  /** LEFT for right rotation; RIGHT for left rotation. */
+  anchorShoulder: "left" | "right";
+  /** RIGHT for right rotation; LEFT for left rotation. */
+  occludedShoulder: "left" | "right";
+  trackingMode: "TWO_SHOULDER" | "SINGLE_SHOULDER_ASSISTED";
   leftShoulderVisibility: number;
   rightShoulderVisibility: number;
   leftHipVisibility: number;

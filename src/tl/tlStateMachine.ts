@@ -14,6 +14,7 @@ import {
 import { handPosture, handsSettled, postureChecks, presentedHand, setupChecks, trialChecks, grade } from "./tlCompensation";
 import { CAMERA_NOTE, type TLConfig } from "./tlConfig";
 import { trackingConfidence } from "./tlQuality";
+import { ShoulderAssist } from "./tlShoulderAssist";
 import {
   ROTATION_ALGORITHMS,
   cameraFacing,
@@ -149,6 +150,8 @@ export class TLSession {
   private stillHips: V3[] = [];
   private frameTimes: number[] = [];
   private direction: RotationDirection;
+  private shoulderAssist = new ShoulderAssist();
+  private lastTrackingMode: "TWO_SHOULDER" | "SINGLE_SHOULDER_ASSISTED" = "TWO_SHOULDER";
 
   constructor(
     private config: TLConfig,
@@ -224,6 +227,8 @@ export class TLSession {
   private initializeNewTrial(): void {
     this.poseFilter.reset();
     this.angleFilter.reset();
+    this.shoulderAssist.reset();
+    this.lastTrackingMode = "TWO_SHOULDER";
     this.ema = null;
     this.lastFiltered = null;
     this.lastAccepted = null;
@@ -246,13 +251,26 @@ export class TLSession {
     this.lastT = now;
     this.frameTimes.push(now);
     this.frameTimes = this.frameTimes.filter((t) => now - t < 1000);
-    const filtered = frame.world.length >= 33 && frame.image.length >= 33 ? this.poseFilter.apply(frame.image, frame.world, now) : null;
+    // Visibility and acceptance use true MediaPipe confidence. Geometry may reconstruct the
+    // direction-expected occluded shoulder so ROM does not collapse on EXPECTED OCCLUSION.
+    const assist = this.shoulderAssist.apply(
+      frame.world,
+      frame.image,
+      this.direction,
+      now,
+      this.config.landmarkConfidence,
+      this.config.occlusionHoldMs
+    );
+    this.lastTrackingMode = assist.mode;
+    const measureWorld = assist.assisted ? assist.world : frame.world;
+    const measureImage = assist.assisted ? assist.image : frame.image;
+    const filtered = measureWorld.length >= 33 && measureImage.length >= 33 ? this.poseFilter.apply(measureImage, measureWorld, now) : null;
     const gatedImage = filtered?.gatedImage ?? [];
     const gatedWorld = filtered?.gatedWorld ?? [];
     const smoothedImage = filtered?.image ?? [];
     const smoothedWorld = filtered?.world ?? [];
-    // Raw ROM uses ungated MediaPipe landmarks only. Gating / hold / confidence must not change it.
-    const rawReading = frame.world.length >= 33 ? readRotation(frame.world, frame.image, this.baseline?.yaws ?? null) : null;
+    // Raw ROM uses ungated landmarks (MediaPipe, or hybrid-reconstructed during expected occlusion).
+    const rawReading = measureWorld.length >= 33 ? readRotation(measureWorld, measureImage, this.baseline?.yaws ?? null) : null;
     const gatedReading = gatedWorld.length >= 33 ? readRotation(gatedWorld, gatedImage, this.baseline?.yaws ?? null) : null;
     const smoothedReading = smoothedWorld.length >= 33 ? readRotation(smoothedWorld, smoothedImage, this.baseline?.yaws ?? null) : null;
     const tracking = this.tracking(frame.world, dt);
@@ -264,7 +282,7 @@ export class TLSession {
     const gatedRom = directionalRom(gatedReading?.torsoPelvisDeg ?? null, this.direction);
     const shoulderMinusPelvis = directionalRom(rawReading?.legacyDeg ?? null, this.direction);
     const velocity = this.velocity(current, dt);
-    const metrics = this.metrics(frame.world, frame.image, rawReading, velocity, tracking);
+    const metrics = this.metrics(measureWorld, measureImage, rawReading, velocity, tracking);
     const measured = cameraFacing(frame.world);
     const facing: CameraFacing = {
       ...measured,
@@ -280,9 +298,9 @@ export class TLSession {
     if (this.movementStarted) this.failFor = movementHard ? this.failFor + dt : 0;
     else this.failFor = 0;
     const hardFailed = movementHard && this.failFor >= this.config.hardFailPersistMs;
-    const vis = landmarkVis(frame.world);
+    const vis = landmarkVis(frame.world, this.direction);
     const soft = Math.max(0.12, this.config.landmarkConfidence * 0.45);
-    this.farLowFor = vis.farShoulder < soft ? this.farLowFor + dt : 0;
+    this.farLowFor = vis.occludedShoulder < soft ? this.farLowFor + dt : 0;
     const spike = this.movementStarted && rawRom != null && isAngleSpike(this.lastSpikeRom, rawRom, dt, this.config.maxAngleJumpDeg, this.config.maxAngularVelocityDegPerSec);
     const acceptance = evaluateAcceptance({
       checks,
@@ -292,6 +310,7 @@ export class TLSession {
       direction: this.direction,
       spike,
       hardPersistFailed: hardFailed,
+      mode: assist.mode,
     });
     if (acceptance.occlusion === "expected-far-shoulder" || acceptance.occlusion === "prolonged") this.occlusionSeen = true;
     const thumbUp = frame.thumbUp === true || (frame.gestureReady === false && presentedHand(frame.world));
@@ -340,7 +359,7 @@ export class TLSession {
         : acceptance.rejectReason
           ? acceptance.rejectReason
           : acceptance.occlusion === "expected-far-shoulder"
-            ? "Movement valid · expected far-shoulder occlusion"
+            ? `Movement valid · expected ${vis.occludedSide.toUpperCase()} shoulder occlusion`
             : "Movement valid",
       movementValid: acceptance.movementValid,
       trackingBand: acceptance.band,
@@ -348,6 +367,9 @@ export class TLSession {
       occlusionState: acceptance.occlusion,
       occlusionLabel: occlusionLabel(acceptance.occlusion, this.direction),
       rejectReason: acceptance.rejectReason,
+      anchorShoulder: vis.anchorSide,
+      occludedShoulder: vis.occludedSide,
+      trackingMode: this.lastTrackingMode,
       leftShoulderVisibility: vis.leftShoulder,
       rightShoulderVisibility: vis.rightShoulder,
       leftHipVisibility: vis.leftHip,
@@ -631,6 +653,8 @@ export class TLSession {
     this.scoreSum = 0;
     this.scoreN = 0;
     this.lastSpikeRom = null;
+    this.shoulderAssist.reset();
+    this.lastTrackingMode = "TWO_SHOULDER";
     this.movementStarted = true;
     this.rotationStartedAt = now;
     this.activeFor = 0;
@@ -837,18 +861,25 @@ export class TLSession {
   private tracking(world: Vec[], dt: number): TrackingStatus {
     const min = this.config.landmarkConfidence;
     const soft = Math.max(0.12, min * 0.45);
-    const points = landmarkVis(world);
+    const points = landmarkVis(world, this.direction);
     const vis = (index: number) => world[index]?.visibility ?? 0;
     const hips = Math.min(points.leftHip, points.rightHip);
     const knees = world.length >= 33 ? Math.min(vis(LM.leftKnee), vis(LM.rightKnee)) : 0;
     const ears = world.length >= 33 ? Math.min(vis(LM.leftEar), vis(LM.rightEar)) : 0;
-    const shoulders = points.nearShoulder;
-    const present = points.nearShoulder > 0.05 && hips > 0.05;
-    // During ACTIVE, knees and the far shoulder may drop without ending the trial.
-    const farOk = points.farShoulder >= soft || (this.movementStarted && this.farLowFor <= this.config.occlusionHoldMs);
-    const criticalOk = present && points.nearShoulder >= soft && hips >= soft && (this.movementStarted ? farOk : points.farShoulder >= min && knees >= min);
+    const shoulders = points.anchorShoulder;
+    const present = points.anchorShoulder > 0.05 && hips > 0.05;
+    // During ACTIVE, knees and the rotation-side (occluded) shoulder may drop without ending the trial.
+    const occludedOk =
+      points.occludedShoulder >= soft ||
+      this.lastTrackingMode === "SINGLE_SHOULDER_ASSISTED" ||
+      (this.movementStarted && this.farLowFor <= this.config.occlusionHoldMs);
+    const criticalOk =
+      present &&
+      points.anchorShoulder >= soft &&
+      hips >= soft &&
+      (this.movementStarted ? occludedOk : points.occludedShoulder >= min && knees >= min);
     this.weakFor = criticalOk ? 0 : this.weakFor + dt;
-    const score = Math.max(0, Math.min(1, points.nearShoulder * 0.5 + Math.max(points.farShoulder, soft) * 0.2 + hips * 0.3));
+    const score = Math.max(0, Math.min(1, points.anchorShoulder * 0.5 + Math.max(points.occludedShoulder, soft) * 0.2 + hips * 0.3));
     return {
       present,
       criticalOk,
@@ -1022,6 +1053,8 @@ export class TLSession {
     this.scoreSum = 0;
     this.scoreN = 0;
     this.lastSpikeRom = null;
+    this.shoulderAssist.reset();
+    this.lastTrackingMode = "TWO_SHOULDER";
     this.activeFor = 0;
     this.algoPeaks = emptyAlgoPeaks();
     this.filteredPeak = null;

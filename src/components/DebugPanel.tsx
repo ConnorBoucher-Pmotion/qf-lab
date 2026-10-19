@@ -84,6 +84,10 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Baseline relative" value={deg(snapshot?.baselineRelativeDeg)} />
               <Item label="Baseline shoulder yaw" value={deg(snapshot?.neutralShoulderYawDeg)} />
               <Item label="Baseline pelvis yaw" value={deg(snapshot?.neutralPelvisYawDeg)} />
+              <Item label="Rotation Direction" value={snapshot ? snapshot.direction.toUpperCase() : "—"} />
+              <Item label="Anchor Shoulder" value={snapshot ? snapshot.anchorShoulder.toUpperCase() : "—"} />
+              <Item label="Occluded Shoulder" value={snapshot ? snapshot.occludedShoulder.toUpperCase() : "—"} />
+              <Item label="Tracking Mode" value={snapshot?.trackingMode ?? "—"} />
               <Item label="MOVEMENT VALIDITY" value={snapshot?.movementStarted ? (snapshot.movementValid ? "PASS" : "FAIL") : "—"} />
               <Item label="TRACKING CONFIDENCE" value={snapshot ? `${snapshot.trackingBand.toUpperCase()} (${snapshot.trackingScore}%)` : "—"} />
               <Item label="Occlusion state" value={snapshot?.occlusionLabel ?? "—"} />

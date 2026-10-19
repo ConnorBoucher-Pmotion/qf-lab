@@ -1,5 +1,6 @@
 import { LM, type Vec } from "../pose/types";
 import type { TLConfig } from "./tlConfig";
+import { shoulderRoles, type ShoulderSide, type TrackingMode } from "./tlShoulderAssist";
 import type { ConstraintCheck, RotationDirection } from "./tlTypes";
 
 export type TrackingBand = "high" | "medium" | "low" | "invalid";
@@ -11,8 +12,12 @@ export type LandmarkVis = {
   rightShoulder: number;
   leftHip: number;
   rightHip: number;
-  nearShoulder: number;
-  farShoulder: number;
+  /** Direction-aware: LEFT for right rotation, RIGHT for left rotation. */
+  anchorShoulder: number;
+  /** Direction-aware: RIGHT for right rotation, LEFT for left rotation. */
+  occludedShoulder: number;
+  anchorSide: ShoulderSide;
+  occludedSide: ShoulderSide;
 };
 
 export type AcceptanceFrame = {
@@ -31,11 +36,21 @@ export type CandidatePeak = {
   samples: number[];
 };
 
-/** Per-landmark visibility without requiring the far shoulder to match the near one. */
-export function landmarkVis(world: Vec[]): LandmarkVis {
+/** Visibility with the correct rotation-side occlusion mapping. */
+export function landmarkVis(world: Vec[], direction: RotationDirection): LandmarkVis {
   const vis = (index: number) => world[index]?.visibility ?? 0;
+  const roles = shoulderRoles(direction);
   if (world.length < 33) {
-    return { leftShoulder: 0, rightShoulder: 0, leftHip: 0, rightHip: 0, nearShoulder: 0, farShoulder: 0 };
+    return {
+      leftShoulder: 0,
+      rightShoulder: 0,
+      leftHip: 0,
+      rightHip: 0,
+      anchorShoulder: 0,
+      occludedShoulder: 0,
+      anchorSide: roles.anchor,
+      occludedSide: roles.occluded,
+    };
   }
   const leftShoulder = vis(LM.leftShoulder);
   const rightShoulder = vis(LM.rightShoulder);
@@ -44,8 +59,10 @@ export function landmarkVis(world: Vec[]): LandmarkVis {
     rightShoulder,
     leftHip: vis(LM.leftHip),
     rightHip: vis(LM.rightHip),
-    nearShoulder: Math.max(leftShoulder, rightShoulder),
-    farShoulder: Math.min(leftShoulder, rightShoulder),
+    anchorShoulder: roles.anchor === "left" ? leftShoulder : rightShoulder,
+    occludedShoulder: roles.occluded === "left" ? leftShoulder : rightShoulder,
+    anchorSide: roles.anchor,
+    occludedSide: roles.occluded,
   };
 }
 
@@ -54,49 +71,51 @@ export function movementReject(checks: ConstraintCheck[]): ConstraintCheck | nul
 }
 
 /**
- * Score landmark confidence for axial rotation. A dim far shoulder is expected
- * and does not force INVALID by itself.
+ * Score landmark confidence for axial rotation. The shoulder on the rotation
+ * side may dim; that is expected occlusion, not an automatic invalid frame.
  */
 export function scoreTracking(
   vis: LandmarkVis,
   config: TLConfig,
-  farLowForMs: number,
+  occludedLowForMs: number,
   movementValid: boolean,
-  spike: boolean
+  spike: boolean,
+  mode: TrackingMode
 ): { band: TrackingBand; score: number; occlusion: OcclusionState } {
   const min = config.landmarkConfidence;
   const soft = Math.max(0.12, min * 0.45);
   const hips = Math.min(vis.leftHip, vis.rightHip);
-  if (hips < soft || vis.nearShoulder < soft) {
+  if (hips < soft || vis.anchorShoulder < soft) {
     return { band: "invalid", score: 0, occlusion: "lost" };
   }
   if (spike || !movementValid) {
-    return { band: "invalid", score: Math.min(vis.nearShoulder, hips), occlusion: farLowForMs > 0 ? "expected-far-shoulder" : "none" };
+    return { band: "invalid", score: Math.min(vis.anchorShoulder, hips), occlusion: occludedLowForMs > 0 ? "expected-far-shoulder" : "none" };
   }
 
-  const farOk = vis.farShoulder >= min;
-  const farSoft = vis.farShoulder >= soft;
+  const occludedOk = vis.occludedShoulder >= min;
+  const occludedSoft = vis.occludedShoulder >= soft || mode === "SINGLE_SHOULDER_ASSISTED";
   const occlusion: OcclusionState =
-    !farOk && farSoft
+    !occludedOk && occludedSoft
       ? "expected-far-shoulder"
-      : !farSoft && farLowForMs <= config.occlusionHoldMs
+      : !occludedSoft && occludedLowForMs <= config.occlusionHoldMs
         ? "expected-far-shoulder"
-        : !farSoft && farLowForMs > config.occlusionHoldMs
+        : !occludedSoft && occludedLowForMs > config.occlusionHoldMs
           ? "prolonged"
           : "none";
 
-  let score = (vis.nearShoulder * 0.45 + Math.max(vis.farShoulder, soft) * 0.2 + hips * 0.35);
-  if (occlusion === "expected-far-shoulder") score *= 0.92;
+  let score = vis.anchorShoulder * 0.5 + Math.max(vis.occludedShoulder, soft) * 0.15 + hips * 0.35;
+  if (mode === "SINGLE_SHOULDER_ASSISTED") score = vis.anchorShoulder * 0.55 + hips * 0.45;
+  if (occlusion === "expected-far-shoulder") score *= 0.94;
   if (occlusion === "prolonged") score *= 0.7;
   score = Math.max(0, Math.min(1, score));
 
-  if (occlusion === "prolonged" && vis.farShoulder < soft * 0.5) {
+  if (occlusion === "prolonged" && vis.occludedShoulder < soft * 0.5 && mode !== "SINGLE_SHOULDER_ASSISTED") {
     return { band: "low", score, occlusion };
   }
-  if (occlusion === "expected-far-shoulder" || score < 0.72) {
-    return { band: score >= 0.55 ? "medium" : "low", score, occlusion };
+  if (occlusion === "expected-far-shoulder" || mode === "SINGLE_SHOULDER_ASSISTED" || score < 0.72) {
+    return { band: score >= 0.55 ? "medium" : "low", score, occlusion: occlusion === "none" ? "expected-far-shoulder" : occlusion };
   }
-  if (score >= 0.78 && farOk) return { band: "high", score, occlusion: "none" };
+  if (score >= 0.78 && occludedOk) return { band: "high", score, occlusion: "none" };
   return { band: "medium", score, occlusion };
 }
 
@@ -108,15 +127,19 @@ export function evaluateAcceptance(input: {
   direction: RotationDirection;
   spike: boolean;
   hardPersistFailed: boolean;
+  mode?: TrackingMode;
 }): AcceptanceFrame {
   const rejected = input.hardPersistFailed ? movementReject(input.checks) : null;
   const movementValid = rejected == null;
-  const tracked = scoreTracking(input.vis, input.config, input.farLowForMs, movementValid, input.spike);
+  const tracked = scoreTracking(input.vis, input.config, input.farLowForMs, movementValid, input.spike, input.mode ?? "TWO_SHOULDER");
   let rejectReason = "";
   if (input.spike) rejectReason = "Large landmark jump";
   else if (rejected) rejectReason = rejected.message || rejected.label;
   else if (tracked.band === "invalid") rejectReason = "Tracking confidence too low";
-  else if (tracked.band === "low") rejectReason = tracked.occlusion === "prolonged" ? `Tracking confidence too low for ${Math.round(input.farLowForMs)} ms` : "Tracking confidence low";
+  else if (tracked.band === "low") {
+    rejectReason =
+      tracked.occlusion === "prolonged" ? `Tracking confidence too low for ${Math.round(input.farLowForMs)} ms` : "Tracking confidence low";
+  }
 
   const acceptPeak = movementValid && !input.spike && (tracked.band === "high" || tracked.band === "medium");
   const candidateOnly = movementValid && !input.spike && tracked.band === "low";
@@ -132,7 +155,13 @@ export function evaluateAcceptance(input: {
 }
 
 /** Promote a low-confidence candidate only when nearby frames agree. */
-export function updateCandidate(candidate: CandidatePeak | null, value: number, now: number, windowMs: number, agreeDeg: number): { candidate: CandidatePeak | null; promoted: number | null } {
+export function updateCandidate(
+  candidate: CandidatePeak | null,
+  value: number,
+  now: number,
+  windowMs: number,
+  agreeDeg: number
+): { candidate: CandidatePeak | null; promoted: number | null } {
   if (!Number.isFinite(value)) return { candidate, promoted: null };
   if (!candidate || now - candidate.at > windowMs || Math.abs(value - candidate.value) > agreeDeg * 2) {
     return { candidate: { value, at: now, samples: [value] }, promoted: null };
@@ -162,10 +191,11 @@ export function trialQuality(scorePct: number, occlusionSeen: boolean, accepted:
 }
 
 export function occlusionLabel(state: OcclusionState, direction: RotationDirection): string {
+  const roles = shoulderRoles(direction);
   if (state === "none") return "None";
   if (state === "lost") return "Landmarks lost";
-  if (state === "prolonged") return "Prolonged far-shoulder occlusion";
-  return direction === "left" ? "EXPECTED FAR-SHOULDER OCCLUSION (right)" : "EXPECTED FAR-SHOULDER OCCLUSION (left)";
+  if (state === "prolonged") return `Prolonged ${roles.occluded.toUpperCase()} shoulder occlusion`;
+  return `EXPECTED ${roles.occluded.toUpperCase()} SHOULDER OCCLUSION`;
 }
 
 export function bandLabel(band: TrackingBand): string {
