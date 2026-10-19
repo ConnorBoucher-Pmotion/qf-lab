@@ -60,8 +60,8 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Active trial tracking" value={yesNo(snapshot?.movementStarted && !snapshot.result && snapshot.state !== "READY")} />
               <Item label="Rotation from neutral" value={deg(snapshot?.rom.filtered)} />
               <Item label="Countdown" value={snapshot?.countdownLabel ?? "—"} />
-              <Item label="Minimum ROM to complete" value={snapshot ? `${config.minPeakRomDeg}°` : "—"} />
-              <Item label="Minimum active time" value={snapshot ? `${config.minActiveMs} ms` : "—"} />
+              <Item label="Capture window" value={snapshot ? `${config.captureWindowMs} ms` : "—"} />
+              <Item label="Thumbs-up hold" value={snapshot ? `${config.thumbStableMs} ms` : "—"} />
               <Item label="Camera stream" value={snapshot?.cameraActive ? "ACTIVE" : "INACTIVE"} />
               <Item label="MediaPipe frame loop" value={snapshot?.poseLoop === "active" ? "ACTIVE" : "STOPPED"} />
               <Item label="Last pose frame" value={snapshot?.lastPoseAt == null ? "—" : `${Math.round(snapshot.lastPoseAt)} ms`} />
@@ -74,8 +74,17 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Raw peak" value={deg(snapshot?.movementStarted ? snapshot.rom.rawPeak : null)} />
               <Item label="Filtered peak" value={deg(snapshot?.movementStarted ? snapshot.rom.filteredPeak : null)} />
               <Item label="Valid peak" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
-              <Item label="Neutral shoulder yaw" value={deg(snapshot?.neutralShoulderYawDeg)} />
-              <Item label="Neutral pelvis yaw" value={deg(snapshot?.neutralPelvisYawDeg)} />
+              <Item label="Raw shoulder yaw" value={deg(snapshot?.rawShoulderYawDeg)} />
+              <Item label="Smoothed shoulder yaw" value={deg(snapshot?.smoothedShoulderYawDeg)} />
+              <Item label="Raw pelvis yaw" value={deg(snapshot?.rawPelvisYawDeg)} />
+              <Item label="Smoothed pelvis yaw" value={deg(snapshot?.smoothedPelvisYawDeg)} />
+              <Item label="Relative torso / pelvis" value={deg(snapshot?.rom.filtered)} />
+              <Item label="Baseline shoulder yaw" value={deg(snapshot?.neutralShoulderYawDeg)} />
+              <Item label="Baseline pelvis yaw" value={deg(snapshot?.neutralPelvisYawDeg)} />
+              <Item label="Max valid ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
+              <Item label="Time left" value={snapshot?.captureRemainingMs == null ? "—" : `${Math.round(snapshot.captureRemainingMs)} ms`} />
+              <Item label="Thumbs-up progress" value={snapshot ? `${Math.round(snapshot.thumbProgress * 100)}%` : "—"} />
+              <Item label="Movement" value={snapshot?.movementMessage || "—"} />
               <Item label="Shoulder width ratio" value={snapshot?.shoulderSpanRatio == null ? "—" : snapshot.shoulderSpanRatio.toFixed(3)} />
               <Item label="Image shoulder yaw" value={deg(snapshot?.imageShoulderYawDeg)} />
               <Item label="Image width yaw" value={deg(snapshot?.imageWidthDeg)} />

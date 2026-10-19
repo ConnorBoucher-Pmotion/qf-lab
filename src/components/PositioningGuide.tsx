@@ -2,11 +2,12 @@ import type { ConstraintCheck, TLSnapshot } from "../tl/tlTypes";
 
 export function PositioningGuide({ snapshot }: { snapshot: TLSnapshot | null }) {
   const state = snapshot?.state ?? "SEARCHING";
-  const setup = state === "SEARCHING" || state === "POSITIONING" || state === "STABLE" || state === "CALIBRATING";
-  const checks = setup ? (snapshot?.setupChecks ?? []) : (snapshot?.checks ?? []);
+  const movement = state === "ACTIVE" || state === "MEASURING" || state === "PEAK" || state === "HOLD" || state === "TRACKING_LOST" || state === "COMPLETE";
+  const checks = movement ? (snapshot?.checks ?? []) : (snapshot?.setupChecks ?? []);
   return (
     <section className="gate-box">
-      <p className="kicker">{setup ? "Position" : "Compensation"}</p>
+      <p className="kicker">{movement ? "During rotation" : "Starting position"}</p>
+      {movement && snapshot?.movementMessage ? <p className={`movement-note${snapshot.movementMessage === "Movement valid" ? " ok" : ""}`}>{snapshot.movementMessage}</p> : null}
       <ul className="checklist">
         {checks.length === 0 ? (
           <li className="st-na">
@@ -25,7 +26,7 @@ export function PositioningGuide({ snapshot }: { snapshot: TLSnapshot | null }) 
           ))
         )}
       </ul>
-      <FacingReadout snapshot={snapshot} />
+      {movement ? null : <FacingReadout snapshot={snapshot} />}
     </section>
   );
 }
@@ -75,6 +76,6 @@ function mark(check: ConstraintCheck): string {
 
 export function instructionTone(state: TLSnapshot["state"] | undefined): string {
   if (state === "INVALID" || state === "SEARCHING" || state === "TRACKING_LOST" || state == null) return "bad";
-  if (state === "POSITIONING" || state === "STABLE" || state === "CALIBRATING" || state === "COUNTDOWN" || state === "PEAK") return "warn";
+  if (state === "POSITIONING" || state === "STABLE" || state === "CALIBRATING" || state === "COUNTDOWN" || state === "PEAK" || state === "ACTIVE") return "warn";
   return "ok";
 }

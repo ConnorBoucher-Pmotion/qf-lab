@@ -2,14 +2,17 @@ import type { TLSnapshot } from "../tl/tlTypes";
 
 export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) {
   const state = snapshot?.state ?? "SEARCHING";
-  const meter = state === "CALIBRATING" || state === "STABLE" ? (snapshot?.calibrationProgress ?? 0) : state === "PEAK" || state === "HOLD" ? (snapshot?.holdProgress ?? 0) : 0;
-  const direction = snapshot?.direction === "left" ? "Left rotation" : "Right rotation";
-  const live = snapshot?.countdownLabel ?? (snapshot?.rom.filtered != null ? snapshot.rom.filtered.toFixed(1) : null);
+  const active = state === "ACTIVE" || state === "MEASURING" || state === "COUNTDOWN";
+  const meter = state === "CALIBRATING" || state === "STABLE" ? (snapshot?.calibrationProgress ?? 0) : active ? (snapshot?.holdProgress ?? 0) : 0;
+  const side = snapshot?.direction === "left" ? "LEFT" : "RIGHT";
+  const kicker = state === "ACTIVE" || state === "MEASURING" ? `ROTATE ${side}` : `TL Junction · ${snapshot?.direction === "left" ? "Left" : "Right"} rotation`;
+  const live = snapshot?.countdownLabel ?? (snapshot?.rom.filtered != null ? Math.max(0, snapshot.rom.filtered).toFixed(1) : null);
+  const remain = snapshot?.captureRemainingMs;
   return (
     <section className="live-rom">
-      <p className="kicker">TL Junction · {direction}</p>
+      <p className="kicker">{kicker}</p>
       <p className="angle">{live ?? "—.—"}</p>
-      <p className="angle-unit">{snapshot?.countdownLabel ? "countdown" : snapshot?.calibrationComplete ? "filtered rotation from neutral, degrees" : "live rotation, degrees"}</p>
+      <p className="angle-unit">{snapshot?.countdownLabel ? "get ready" : state === "ACTIVE" ? "live ROM, degrees" : snapshot?.calibrationComplete ? "torso relative to pelvis, degrees" : "live rotation, degrees"}</p>
       <div className="meter" aria-hidden="true">
         <span style={{ width: `${Math.round(meter * 100)}%` }} />
       </div>
@@ -19,28 +22,24 @@ export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) 
           <dd className={`pill sev-${toneOf(snapshot)}`}>{state.replace("_", " ")}</dd>
         </div>
         <div>
-          <dt>Active trial ROM</dt>
-          <dd>{fmt(snapshot?.rom.active)}</dd>
+          <dt>Best valid</dt>
+          <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.validPeak : null)}</dd>
+        </div>
+        <div>
+          <dt>Time left</dt>
+          <dd>{remain == null ? "—" : `${(remain / 1000).toFixed(1)} s`}</dd>
+        </div>
+        <div>
+          <dt>Live ROM</dt>
+          <dd>{fmt(snapshot?.rom.filtered == null ? null : Math.max(0, snapshot.rom.filtered))}</dd>
         </div>
         <div>
           <dt>Raw ROM</dt>
           <dd>{fmt(snapshot?.rom.raw)}</dd>
         </div>
         <div>
-          <dt>Filtered ROM</dt>
-          <dd>{fmt(snapshot?.rom.filtered)}</dd>
-        </div>
-        <div>
-          <dt>Raw peak</dt>
-          <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.rawPeak : null)}</dd>
-        </div>
-        <div>
-          <dt>Filtered peak</dt>
-          <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.filteredPeak : null)}</dd>
-        </div>
-        <div>
-          <dt>Valid peak</dt>
-          <dd>{fmt(snapshot?.movementStarted ? snapshot.rom.validPeak : null)}</dd>
+          <dt>Status</dt>
+          <dd>{snapshot?.movementStarted ? snapshot.movementMessage || "Movement valid" : "Not capturing"}</dd>
         </div>
         <div>
           <dt>Tracking</dt>
@@ -51,7 +50,7 @@ export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) 
           <dd>{snapshot ? `${snapshot.quality}%` : "—"}</dd>
         </div>
       </dl>
-      <p className="quality-line">The live number is not a saved result until rotation has started.</p>
+      <p className="quality-line">{state === "ACTIVE" ? "The saved result is the highest angle while movement stayed valid." : "The live number is not a saved result until the capture window starts."}</p>
     </section>
   );
 }

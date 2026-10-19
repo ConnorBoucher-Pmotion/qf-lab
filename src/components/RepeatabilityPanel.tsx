@@ -24,7 +24,7 @@ export function RepeatabilityPanel({ trials, direction, series, videoIds, saving
     <section className="card repeat">
       <h2>Repeated trials</h2>
       <p className="protocol">
-        Sit facing the camera, feet flat, knees about 90°, pelvis forward. Cross your arms or hold a stick across the shoulders. Rotate as far as comfortably possible. No bouncing. No forced rotation.
+        Sit upright, feet flat, knees about 90°, hands clasped behind your head, elbows out. Rotate the upper body as far as comfortably possible. Keep the pelvis still. No bouncing. No forced rotation.
       </p>
       <p className="muted small">
         Start with the camera straight in front, including the head, shoulders, hips, and knees. Rotation uses world-landmark depth. If that disagrees with a goniometer, test a chest-height camera about 20–30° off pure frontal without changing the seated movement.

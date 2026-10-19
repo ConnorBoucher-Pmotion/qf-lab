@@ -70,6 +70,11 @@ h1, h2 { font-size: 1rem; margin: 0; font-weight: 650; white-space: nowrap; }
   flex-direction: column;
 }
 
+.countdown-word { font-size: 3.2rem; letter-spacing: 0.02em; text-align: center; padding: 0 1rem; }
+
+.movement-note { margin: 0.2rem 0 0.35rem; color: #ffd0d0; font-size: 0.85rem; }
+.movement-note.ok { color: #d9ffe9; }
+
 .countdown {
   position: absolute;
   inset: 0;
@@ -403,7 +408,7 @@ button.primary { background: #d7e6f5; color: #102033; }
 }
 .video-waiting { min-height: 220px; display: flex; align-items: center; justify-content: center; color: #9aabbd; }
 
-.live-rows.tall { grid-template-rows: repeat(9, 1.35rem); }
+.live-rows.tall { grid-template-rows: repeat(8, 1.35rem); }
 
 .algo-compare {
   flex: 0 0 auto;

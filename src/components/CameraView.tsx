@@ -5,6 +5,7 @@ import type { RotationDirection, TLSnapshot } from "../tl/tlTypes";
 import { syntheticSeated } from "../tl/tlRotation";
 import { LM } from "../pose/types";
 import { createTlPoseLandmarker, imageLandmarks, worldLandmarks, type PoseLandmarkerHandle } from "../pose/mediaPipePose";
+import { createThumbRecognizer, isThumbUp, type GestureHandle } from "../pose/thumbsUp";
 import { TrialRecorder, type RecorderStatus, type SavedRecording } from "../recording/trialRecorder";
 import { drawTlOverlay } from "./TLOverlay";
 
@@ -78,6 +79,8 @@ export function CameraView({ direction, config, resetSignal, nextSignal, startSi
     let lastState = "";
     let stream: MediaStream | null = null;
     let landmarker: PoseLandmarkerHandle | null = null;
+    let gestures: GestureHandle | null = null;
+    let gestureReady: boolean | undefined;
     const started = performance.now();
 
     const video = document.createElement("video");
@@ -148,8 +151,16 @@ export function CameraView({ direction, config, resetSignal, nextSignal, startSi
         const detection = landmarker.detectForVideo(video, now);
         const image = imageLandmarks(detection.landmarks?.[0], width, height);
         const world = worldLandmarks(detection.worldLandmarks?.[0], detection.landmarks?.[0]);
+        let thumbUp = false;
+        if (gestures && session.wantsThumb()) {
+          try {
+            thumbUp = isThumbUp(gestures.recognizeForVideo(video, now));
+          } catch {
+            thumbUp = false;
+          }
+        }
         session.setConfig(configRef.current);
-        const snapshot = session.push({ width, height, image: image ?? [], world: world ?? [] }, now);
+        const snapshot = session.push({ width, height, image: image ?? [], world: world ?? [], thumbUp, gestureReady }, now);
         snapshot.cameraActive = video.readyState >= 2 && video.srcObject != null;
         drawTlOverlay(ctx, width, height, snapshot, configRef.current);
         publish(snapshot, now);
@@ -194,6 +205,8 @@ export function CameraView({ direction, config, resetSignal, nextSignal, startSi
         try {
           landmarker = await createTlPoseLandmarker();
           if (!cancelled) setStatus("");
+          gestures = await createThumbRecognizer();
+          gestureReady = gestures != null;
         } catch (error) {
           const message = error instanceof Error ? error.message.split("\n")[0] : "Pose model failed";
           if (!cancelled) setStatus(`Camera is on. Pose tracking failed: ${message}`);
@@ -209,6 +222,7 @@ export function CameraView({ direction, config, resetSignal, nextSignal, startSi
       cancelAnimationFrame(raf);
       recorder.dispose();
       landmarker?.close?.();
+      gestures?.close?.();
       stream?.getTracks().forEach((track) => track.stop());
       if (sessionRef.current === session) sessionRef.current = null;
     };

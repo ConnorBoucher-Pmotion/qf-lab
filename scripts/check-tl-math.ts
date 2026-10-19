@@ -92,6 +92,9 @@ const fast = normalizeConfig({
   hardFailPersistMs: 60,
   pelvisRotationWarnDeg: 3,
   pelvisRotationFailDeg: 5,
+  constraintVersion: 3,
+  filterVersion: 2,
+  facingThresholdVersion: 2,
 });
 
 function feed(session: TLSession, pose: ReturnType<typeof syntheticSeated>, frames: number, start: number): number {
@@ -120,6 +123,7 @@ for (let step = 1; step <= 12; step += 1) {
   t = feed(clean, syntheticSeated({ shoulderYawDeg: step * 3, pelvisYawDeg: 1 }), 2, t);
 }
 t = feed(clean, syntheticSeated({ shoulderYawDeg: 36, pelvisYawDeg: 1 }), 20, t);
+clean.acceptPeak();
 const done = clean.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 36, pelvisYawDeg: 1 }) }, t);
 if (done.state !== "COMPLETE" || !done.result?.accepted) throw new Error(`clean trial ended ${done.state} ${done.result?.instruction}`);
 near(done.result.measuredRom, 36, 6, "clean valid ROM");
@@ -134,6 +138,7 @@ for (let step = 1; step <= 10; step += 1) t = feed(mixed, syntheticSeated({ shou
 t = feed(mixed, syntheticSeated({ shoulderYawDeg: 40 }), 3, t);
 for (let step = 1; step <= 8; step += 1) t = feed(mixed, syntheticSeated({ shoulderYawDeg: 40 + step * 2, leanRightM: 0.22 }), 2, t);
 t = feed(mixed, syntheticSeated({ shoulderYawDeg: 56, leanRightM: 0.22 }), 20, t);
+mixed.acceptPeak();
 const split = mixed.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 56, leanRightM: 0.22 }) }, t);
 if (!split.result) throw new Error(`compensated trial did not finish: ${split.state}`);
 if ((split.result.rawMaximum ?? 0) < (split.result.measuredRom ?? 0) + 8) {
@@ -208,6 +213,7 @@ for (const peak of [28, 16, 34]) {
   clock += 33;
   for (let step = 1; step <= 36; step += 1) clock = feed(life, syntheticSeated({ shoulderYawDeg: (peak * step) / 36 }), 1, clock);
   clock = feed(life, syntheticSeated({ shoulderYawDeg: peak }), 24, clock);
+  life.acceptPeak();
   const finished = life.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: peak }) }, clock);
   if (finished.state !== "COMPLETE" || finished.result?.measuredRom == null) throw new Error(`trial ${roms.length + 1} did not complete (${finished.state})`);
   roms.push(finished.result.measuredRom);
@@ -244,7 +250,7 @@ if (during.countdownLabel !== "2" && during.countdownLabel !== "1" && during.cou
   throw new Error(`countdown label ${during.countdownLabel}`);
 }
 const rotateCue = counted.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 25 }) }, clock + 1000);
-if (rotateCue.countdownLabel !== "ROTATE" || rotateCue.movementStarted || rotateCue.rom.rawPeak != null) {
+if (rotateCue.countdownLabel !== "ROTATE RIGHT" || rotateCue.movementStarted || rotateCue.rom.rawPeak != null) {
   throw new Error(`ROTATE cue started measurement (${rotateCue.countdownLabel}, peak ${rotateCue.rom.rawPeak})`);
 }
 counted.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 25 }) }, clock + 1300);
@@ -277,6 +283,48 @@ const shoulderRow = free.algorithmsLive.find((row) => row.id === "shoulderYaw");
 if ((shoulderRow?.rightPeak ?? 0) < 25 || (shoulderRow?.leftPeak ?? 0) < 20) {
   throw new Error(`test mode peaks right ${shoulderRow?.rightPeak} left ${shoulderRow?.leftPeak}`);
 }
+
+const windowed = new TLSession(normalizeConfig({ ...fast, captureWindowMs: 5000, countdownMs: 0 }), "right");
+let tw = feed(windowed, syntheticSeated(), 40, 0);
+const windowStart = tw;
+windowed.arm(tw);
+tw += 33;
+for (const angle of [12, 18, 25, 31, 36, 39, 38, 34]) tw = feed(windowed, syntheticSeated({ shoulderYawDeg: angle, pelvisYawDeg: 1 }), 3, tw);
+const best = windowed.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 34, pelvisYawDeg: 1 }) }, tw);
+if (best.state !== "ACTIVE") throw new Error(`capture window closed early (${best.state})`);
+if ((best.rom.validPeak ?? 0) < 33) throw new Error(`best valid ROM was not kept: ${best.rom.validPeak}`);
+while (tw < windowStart + 5300) tw = feed(windowed, syntheticSeated({ shoulderYawDeg: 34, pelvisYawDeg: 1 }), 1, tw);
+const closed = windowed.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 34, pelvisYawDeg: 1 }) }, tw);
+if (closed.state !== "COMPLETE" || (closed.result?.measuredRom ?? 0) < 33) {
+  throw new Error(`window result ${closed.state} ${closed.result?.measuredRom}`);
+}
+if (closed.result?.direction !== "right") throw new Error("window forgot the tested side");
+
+const gated = new TLSession(normalizeConfig({ ...fast, captureWindowMs: 8000 }), "right");
+let tg = feed(gated, syntheticSeated(), 40, 0);
+gated.arm(tg);
+tg = feed(gated, syntheticSeated({ shoulderYawDeg: 22, pelvisYawDeg: 1 }), 8, tg + 33);
+tg = feed(gated, syntheticSeated({ shoulderYawDeg: 22, pelvisYawDeg: 1, leanRightM: 0.22 }), 24, tg);
+const leaned = gated.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 22, pelvisYawDeg: 1, leanRightM: 0.22 }) }, tg);
+if (leaned.checks.find((check) => check.id === "trunk-lateral")?.status !== "fail") throw new Error("lean did not become a failed movement check");
+const frozen = leaned.rom.validPeak ?? 0;
+tg = feed(gated, syntheticSeated({ shoulderYawDeg: 50, pelvisYawDeg: 1, leanRightM: 0.22 }), 16, tg);
+const duringLean = gated.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 50, pelvisYawDeg: 1, leanRightM: 0.22 }) }, tg);
+if (duringLean.state === "COMPLETE") throw new Error("a lean ended the capture window");
+if ((duringLean.rom.validPeak ?? 0) > frozen + 1) throw new Error(`invalid frames raised the best ROM to ${duringLean.rom.validPeak}`);
+if ((duringLean.rom.raw ?? 0) < 40) throw new Error(`live angle stopped during the lean (${duringLean.rom.raw})`);
+
+const thumb = new TLSession(normalizeConfig({ ...fast, thumbStableMs: 400, countdownMs: 600 }), "right");
+let tt = feed(thumb, syntheticSeated(), 40, 0);
+const flicker = thumb.push({ width: 1280, height: 720, ...syntheticSeated(), thumbUp: true }, tt);
+if (flicker.state !== "READY") throw new Error(`one thumbs-up frame started the trial (${flicker.state})`);
+tt += 33;
+for (let i = 0; i < 16; i += 1) {
+  thumb.push({ width: 1280, height: 720, ...syntheticSeated(), thumbUp: true }, tt);
+  tt += 33;
+}
+const armedByThumb = thumb.push({ width: 1280, height: 720, ...syntheticSeated() }, tt);
+if (armedByThumb.state !== "COUNTDOWN") throw new Error(`a held thumbs up did not start the countdown (${armedByThumb.state})`);
 
 const oldFilter = new OneEuroFilter(1.2, 0.04);
 const newFilter = new OneEuroFilter(3, 0.35);

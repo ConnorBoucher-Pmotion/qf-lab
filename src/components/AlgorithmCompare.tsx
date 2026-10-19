@@ -27,7 +27,7 @@ export function AlgorithmCompare({ snapshot }: { snapshot: TLSnapshot | null }) 
         </tbody>
       </table>
       <p className="algo-note">
-        Positive current is your right. Peaks stay blank until ROTATE. Image width {deg(snapshot?.imageWidthDeg)}. Shoulder width ratio{" "}
+        Positive values are the tested side. Peaks stay blank until the capture window starts. Image width {deg(snapshot?.imageWidthDeg)}. Shoulder width ratio{" "}
         {snapshot?.shoulderSpanRatio == null ? "—" : snapshot.shoulderSpanRatio.toFixed(2)}.
       </p>
     </section>

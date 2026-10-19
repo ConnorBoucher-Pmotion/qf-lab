@@ -14,7 +14,7 @@ export type RecIntent =
   | "discard-then-preroll";
 
 const PREROLL: ReadonlySet<TLStateName> = new Set(["STABLE", "CALIBRATING", "READY", "COUNTDOWN"]);
-const KEEP: ReadonlySet<TLStateName> = new Set(["MEASURING", "PEAK", "HOLD", "TRACKING_LOST"]);
+const KEEP: ReadonlySet<TLStateName> = new Set(["ACTIVE", "MEASURING", "PEAK", "HOLD", "TRACKING_LOST"]);
 
 /** Pre-roll covers neutral calibration. The kept file continues once rotation starts. */
 export function recordingIntent(mode: RecMode, state: TLStateName, elapsedMs: number, preRollMs: number): RecIntent {

@@ -13,10 +13,14 @@ export type TLConfig = {
   minMovementDeg: number;
   minVelocityDegPerSec: number;
   movementConfirmMs: number;
-  /** Kept so older saved configs still load. The start is the Start rotation button. */
+  /** Kept so older saved configs still load. Completion is the capture window, not a hold. */
   movementConfirmFrames: number;
   /** 3-2-1 length. Measurement begins after this, plus a short ROTATE cue. 0 skips the countdown. */
   countdownMs: number;
+  /** How long the thumbs-up must stay detected before the countdown starts. */
+  thumbStableMs: number;
+  /** Active capture length after the countdown. The best valid angle in this window is saved. */
+  captureWindowMs: number;
   /** Hold cannot finish a trial before the active measurement has lasted this long. */
   minActiveMs: number;
   /** Hold cannot finish a trial before the rotation has reached this far from neutral. */
@@ -66,17 +70,21 @@ export type TLConfig = {
   facingThresholdVersion: number;
   /** Internal. Stops the one-time smoothing and hold-default migration from repeating. */
   filterVersion: number;
+  /** Internal. Stops the one-time pelvis-threshold migration from repeating. */
+  constraintVersion: number;
   hardFailPersistMs: number;
 };
 
 export const TL_CONFIG: TLConfig = {
-  algorithm: "legacy",
+  algorithm: "torsoPelvis",
   angleFilter: "oneEuro",
   minMovementDeg: 8,
   minVelocityDegPerSec: 10,
   movementConfirmMs: 250,
   movementConfirmFrames: 4,
   countdownMs: 1500,
+  thumbStableMs: 750,
+  captureWindowMs: 8000,
   minActiveMs: 2000,
   minPeakRomDeg: 20,
   romTestMode: false,
@@ -101,8 +109,8 @@ export const TL_CONFIG: TLConfig = {
   confidenceGraceMs: 150,
   trackingLostMs: 400,
   trackingResetMs: 2500,
-  pelvisRotationWarnDeg: 3,
-  pelvisRotationFailDeg: 5,
+  pelvisRotationWarnDeg: 7,
+  pelvisRotationFailDeg: 12,
   pelvisTranslationWarnPct: 4,
   pelvisTranslationFailPct: 8,
   lateralLeanWarnDeg: 6,
@@ -120,7 +128,8 @@ export const TL_CONFIG: TLConfig = {
   bypassFaceCamera: false,
   facingThresholdVersion: 2,
   filterVersion: 2,
-  hardFailPersistMs: 300,
+  constraintVersion: 3,
+  hardFailPersistMs: 400,
 };
 
 export type ConfigGroup = "Measurement" | "Neutral calibration" | "Peak hold" | "Smoothing" | "Tracking" | "Pelvis" | "Trunk" | "Lower body" | "Setup";
@@ -184,8 +193,8 @@ export const TL_CONFIG_FIELDS: ConfigField[] = [
     options: ROTATION_ALGORITHMS.map((id) => ({ value: id, label: ALGORITHM_INFO[id].label })),
   },
   r("countdownMs", "Start countdown", "Measurement", 0, 3000, 100, "ms"),
-  r("minActiveMs", "Minimum active measurement duration", "Measurement", 0, 5000, 100, "ms"),
-  r("minPeakRomDeg", "Minimum ROM before peak can complete", "Measurement", 0, 60, 1, "deg"),
+  r("thumbStableMs", "Thumbs-up must hold", "Measurement", 400, 1500, 50, "ms"),
+  r("captureWindowMs", "Capture window", "Measurement", 5000, 10000, 500, "ms"),
   { kind: "toggle", key: "romTestMode", label: "ROM algorithm test mode", group: "Measurement" },
   r("stableMs", "Neutral stillness before calibration", "Neutral calibration", 200, 2000, 50, "ms"),
   r("calibrationMs", "Neutral calibration duration", "Neutral calibration", 400, 3000, 50, "ms"),
@@ -267,6 +276,11 @@ export function normalizeConfig(input: unknown): TLConfig {
     if (out.landmarkMinCutoffHz === 1.4) out.landmarkMinCutoffHz = TL_CONFIG.landmarkMinCutoffHz;
     if (out.holdMs === 1750) out.holdMs = TL_CONFIG.holdMs;
     if (out.peakWindowDeg === 3) out.peakWindowDeg = TL_CONFIG.peakWindowDeg;
+  }
+  if (source.constraintVersion !== 3) {
+    if (out.pelvisRotationFailDeg === 5) out.pelvisRotationFailDeg = 12;
+    if (out.pelvisRotationWarnDeg === 3 && out.pelvisRotationWarnDeg < out.pelvisRotationFailDeg) out.pelvisRotationWarnDeg = Math.min(7, out.pelvisRotationFailDeg - 0.5);
+    if (out.hardFailPersistMs === 300) out.hardFailPersistMs = 400;
   }
   return out;
 }

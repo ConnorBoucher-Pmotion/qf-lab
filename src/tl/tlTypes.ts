@@ -10,6 +10,7 @@ export type TLStateName =
   | "CALIBRATING"
   | "READY"
   | "COUNTDOWN"
+  | "ACTIVE"
   | "MEASURING"
   | "PEAK"
   | "HOLD"
@@ -115,7 +116,7 @@ export type TLSnapshot = {
   instruction: string;
   direction: RotationDirection;
   algorithm: RotationAlgorithm;
-  /** "3", "2", "1", or "ROTATE" while the start countdown is running. */
+  /** "3", "2", "1", or "ROTATE RIGHT" / "ROTATE LEFT" while the start countdown is running. */
   countdownLabel: string | null;
   algorithmsLive: AlgorithmLive[];
   neutralShoulderYawDeg: number | null;
@@ -124,6 +125,16 @@ export type TLSnapshot = {
   imageWidthDeg: number | null;
   imageShoulderYawDeg: number | null;
   romTestMode: boolean;
+  /** Milliseconds left in the active capture window. */
+  captureRemainingMs: number | null;
+  /** 0–1 while a thumbs-up is being held in READY. */
+  thumbProgress: number;
+  /** What the user should fix during the capture window. "Movement valid" when the angle can count. */
+  movementMessage: string;
+  rawShoulderYawDeg: number | null;
+  rawPelvisYawDeg: number | null;
+  smoothedShoulderYawDeg: number | null;
+  smoothedPelvisYawDeg: number | null;
   metrics: TLMetrics;
   tracking: TrackingStatus;
   setupChecks: ConstraintCheck[];

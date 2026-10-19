@@ -96,8 +96,18 @@ export function App() {
   const review = reviewId ? (trials.find((trial) => trial.id === reviewId) ?? null) : null;
   const seriesRef = useRef(series);
   const preRollRef = useRef(preRollMs);
+  const heardState = useRef<string | null>(null);
   seriesRef.current = series;
   preRollRef.current = preRollMs;
+
+  useEffect(() => {
+    const state = snapshot?.state ?? null;
+    if (!state || state === heardState.current) return;
+    const previous = heardState.current;
+    heardState.current = state;
+    if (state === "COUNTDOWN" && previous === "READY") playTone(520, 100);
+    if (state === "ACTIVE" && (previous === "COUNTDOWN" || previous === "READY")) playTone(880, 180);
+  }, [snapshot?.state]);
 
   return (
     <div className="page">
@@ -148,17 +158,17 @@ export function App() {
                 onRecording={onRecording}
                 onRecorderStatus={setRecorder}
               />
-              {snapshot?.countdownLabel ? <p className="countdown">{snapshot.countdownLabel}</p> : null}
+              {snapshot?.countdownLabel ? <p className={`countdown${snapshot.countdownLabel.length > 3 ? " countdown-word" : ""}`}>{snapshot.countdownLabel}</p> : null}
             </div>
             <div className="instruction-bar">
               <p className={`instruction tone-${instructionTone(snapshot?.state)}`}>{snapshot?.instruction ?? "Sit facing the camera."}</p>
               {snapshot?.blockedBy ? <p className="blocked-by">{snapshot.blockedBy}</p> : null}
               <div className="start-row">
                 <button type="button" disabled={snapshot?.state !== "READY" || config.romTestMode} onClick={() => setStartSignal((value) => value + 1)}>
-                  Start rotation
+                  I'm Ready
                 </button>
                 <button type="button" disabled={!snapshot?.movementStarted || snapshot.result != null} onClick={() => setAcceptSignal((value) => value + 1)}>
-                  Accept current peak
+                  End capture
                 </button>
                 <button
                   type="button"
@@ -232,6 +242,23 @@ function nextAttempt(saved: TLTrial[], seriesName: string): number {
 
 function tone(snapshot: TLSnapshot | null): string {
   if (!snapshot || snapshot.state === "SEARCHING" || snapshot.state === "INVALID" || snapshot.state === "TRACKING_LOST") return "red";
-  if (snapshot.state === "POSITIONING" || snapshot.state === "CALIBRATING" || snapshot.state === "COUNTDOWN" || snapshot.state === "PEAK" || snapshot.hardFailed) return "yellow";
+  if (snapshot.state === "POSITIONING" || snapshot.state === "CALIBRATING" || snapshot.state === "COUNTDOWN" || snapshot.state === "PEAK" || snapshot.state === "ACTIVE" || snapshot.hardFailed) return "yellow";
   return "green";
+}
+
+function playTone(frequency: number, ms: number): void {
+  const audio = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!audio) return;
+  const context = new audio();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.frequency.value = frequency;
+  oscillator.type = "sine";
+  gain.gain.value = 0.04;
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start();
+  gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + ms / 1000);
+  oscillator.stop(context.currentTime + ms / 1000);
+  window.setTimeout(() => void context.close(), ms + 80);
 }
