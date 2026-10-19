@@ -515,6 +515,30 @@ if (!afterSnap.movementValid) throw new Error("corrupted shoulder must not turn 
 if ((afterSnap.hybridRom ?? 0) + 4 < (beforeSnap.hybridRom ?? 0)) {
   throw new Error(`hybrid ROM collapsed on chin snap (${beforeSnap.hybridRom} → ${afterSnap.hybridRom}); MediaPipe raw=${afterSnap.mediaPipeRawRom}`);
 }
+if ((afterSnap.hybridRom ?? 0) > (beforeSnap.hybridRom ?? 0) + 8) {
+  throw new Error(`hybrid ROM spiked on chin snap (${beforeSnap.hybridRom} → ${afterSnap.hybridRom}) — estimated shoulder must not drive absolute 3D`);
+}
+if (afterSnap.estimatedShoulderUsedForAbsolute3d) throw new Error("estimated shoulder must never feed absolute 3D ROM");
+if (afterSnap.observedRawRom != null) throw new Error("Observed Raw must be unavailable during occlusion");
+if (afterSnap.lastReliableRom == null) throw new Error("lastReliableRom missing at occlusion handoff");
+if (Math.abs((afterSnap.hybridRom ?? 0) - (afterSnap.lastReliableRom ?? 0)) > 5) {
+  throw new Error(`handoff discontinuity: lastReliable=${afterSnap.lastReliableRom} hybrid=${afterSnap.hybridRom}`);
+}
+// Continue a few occluded frames — hybrid should rise smoothly, never jump to ~87°.
+let climbT = tc + 33;
+let lastHybrid = afterSnap.hybridRom ?? 0;
+for (let i = 1; i <= 10; i += 1) {
+  const pose = syntheticSeated({ shoulderYawDeg: 36 + i * 0.8, pelvisYawDeg: 1 });
+  pose.world[LM.rightShoulder] = { x: nose.x + 0.02, y: nose.y - 0.02, z: nose.z, visibility: 0.8 };
+  pose.image[LM.rightShoulder] = { x: pose.image[LM.nose].x + 8, y: pose.image[LM.nose].y + 6, z: pose.image[LM.nose].z, visibility: 0.8 };
+  const step = corrupt.push({ width: 1280, height: 720, ...pose }, climbT);
+  climbT += 33;
+  const h = step.hybridRom ?? 0;
+  if (h > 60) throw new Error(`occlusion hybrid exploded to ${h}°`);
+  if (h > lastHybrid + 4.5) throw new Error(`occlusion hybrid jumped ${lastHybrid} → ${h}`);
+  lastHybrid = h;
+}
+if (lastHybrid + 1 < (beforeSnap.hybridRom ?? 0)) throw new Error(`occlusion hybrid failed to continue (${lastHybrid})`);
 
 const oldFilter = new OneEuroFilter(1.2, 0.04);
 const newFilter = new OneEuroFilter(3, 0.35);

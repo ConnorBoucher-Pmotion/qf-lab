@@ -70,6 +70,14 @@ export type TLConfig = {
   shoulderRecoverFrames: number;
   /** Blend reconstructed → MediaPipe over this many ms when recovering. */
   shoulderBlendMs: number;
+  /** Max ROM jump allowed at observed→occlusion handoff. */
+  occlusionHandoffJumpDeg: number;
+  /** Max Hybrid ROM change per frame during occlusion (continuity). */
+  occlusionMaxDegPerFrame: number;
+  /** Max Hybrid ROM angular speed during occlusion. */
+  occlusionMaxDegPerSec: number;
+  /** Neighboring samples within this band required to accept a hybrid peak. */
+  hybridPeakAgreeDeg: number;
   /** Development-only camera offset guide. Does not change the angle math. */
   cameraGuideOffsetDeg: number;
   trackingLostMs: number;
@@ -147,6 +155,10 @@ export const TL_CONFIG: TLConfig = {
   shoulderAxisJumpDeg: 22,
   shoulderRecoverFrames: 4,
   shoulderBlendMs: 300,
+  occlusionHandoffJumpDeg: 4,
+  occlusionMaxDegPerFrame: 3,
+  occlusionMaxDegPerSec: 180,
+  hybridPeakAgreeDeg: 2.5,
   cameraGuideOffsetDeg: 0,
   trackingLostMs: 400,
   trackingResetMs: 2500,
@@ -300,6 +312,10 @@ export const TL_CONFIG_FIELDS: ConfigField[] = [
   r("shoulderAxisJumpDeg", "Shoulder-axis jump gate", "Tracking", 8, 45, 1, "deg"),
   r("shoulderRecoverFrames", "Frames to trust MediaPipe again", "Tracking", 2, 12, 1, "frames"),
   r("shoulderBlendMs", "Reconstructed→real blend", "Tracking", 100, 600, 50, "ms"),
+  r("occlusionHandoffJumpDeg", "Occlusion handoff max jump", "Tracking", 1, 10, 0.5, "deg"),
+  r("occlusionMaxDegPerFrame", "Occlusion max °/frame", "Tracking", 1, 8, 0.5, "deg"),
+  r("occlusionMaxDegPerSec", "Occlusion max °/s", "Tracking", 40, 300, 10, "deg/s"),
+  r("hybridPeakAgreeDeg", "Hybrid peak neighbor agree", "Tracking", 1, 6, 0.5, "deg"),
   r("cameraGuideOffsetDeg", "Camera offset guide (dev)", "Setup", 0, 20, 5, "deg"),
 ];
 

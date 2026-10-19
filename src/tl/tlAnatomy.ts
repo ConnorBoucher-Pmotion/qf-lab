@@ -198,26 +198,33 @@ export function evaluateShoulderTrust(input: {
         reasons.push(`Upper-arm length inconsistent (${Math.round(pct * 100)}%)`);
       }
     }
-    // Only use the opposite shoulder for width if it itself still looks lateral/anatomical.
-    // A chin-snapped opposite landmark must not spoil the good anchor via width.
-    if (other && hipMid && (other.visibility ?? 0) >= soft) {
-      const otherCalLateral = side === "left" ? anatomy.rightLateral : anatomy.leftLateral;
-      const otherCalNose = side === "left" ? anatomy.rightShoulderToNose : anatomy.leftShoulderToNose;
-      const otherLateralOk = otherCalLateral > 1e-4 && Math.abs(other.x - hipMid.x) / otherCalLateral >= config.shoulderLateralCollapseRatio;
-      const otherNoseOk = !nose || otherCalNose < 1e-4 || dist(other, nose) / otherCalNose >= config.shoulderNoseCollapseRatio;
-      if (otherLateralOk && otherNoseOk) {
-        const width = dist(shoulder, other);
-        const widthPct = Math.abs(width - anatomy.shoulderWidth) / anatomy.shoulderWidth;
-        if (widthPct > config.shoulderWidthTolPct / 100) {
-          reasons.push(`Shoulder width changed ${Math.round(widthPct * 100)}%`);
-        }
+    // Opposite partner is usable for width/mid only if it does not look chin-snapped.
+    const otherCalLateral = side === "left" ? anatomy.rightLateral : anatomy.leftLateral;
+    const otherCalNose = side === "left" ? anatomy.rightShoulderToNose : anatomy.leftShoulderToNose;
+    const otherLateralOk =
+      !!other &&
+      !!hipMid &&
+      (other.visibility ?? 0) >= soft &&
+      otherCalLateral > 1e-4 &&
+      Math.abs(other.x - hipMid.x) / otherCalLateral >= config.shoulderLateralCollapseRatio;
+    const otherNoseOk = !other || !nose || otherCalNose < 1e-4 || dist(other, nose) / otherCalNose >= config.shoulderNoseCollapseRatio;
+    const otherPartnerOk = otherLateralOk && otherNoseOk;
+    if (otherPartnerOk && other) {
+      const width = dist(shoulder, other);
+      const widthPct = Math.abs(width - anatomy.shoulderWidth) / anatomy.shoulderWidth;
+      if (widthPct > config.shoulderWidthTolPct / 100) {
+        reasons.push(`Shoulder width changed ${Math.round(widthPct * 100)}%`);
       }
     }
     const calLateral = side === "left" ? anatomy.leftLateral : anatomy.rightLateral;
-    if (hipMid && calLateral > 1e-4) {
-      const lateral = Math.abs(shoulder.x - hipMid.x);
-      if (lateral / calLateral < config.shoulderLateralCollapseRatio) {
-        reasons.push("Shoulder near body centerline/head");
+    if (calLateral > 1e-4) {
+      // Prefer live shoulder-mid when the opposite side still looks lateral — survives torso lean/shift.
+      const referenceMid = otherPartnerOk && other ? mid(shoulder, other) : hipMid;
+      if (referenceMid) {
+        const lateral = Math.abs(shoulder.x - referenceMid.x);
+        if (lateral / calLateral < config.shoulderLateralCollapseRatio) {
+          reasons.push("Shoulder near body centerline/head");
+        }
       }
     }
     // Y-up world: ear is above shoulder. Sudden climb toward ear without torso rise.
@@ -235,11 +242,14 @@ export function evaluateShoulderTrust(input: {
   if (lastTrusted) {
     const step = dist(shoulder, lastTrusted);
     const scale = anatomy?.shoulderWidth ?? Math.max(dist(shoulder, other ?? shoulder), 1e-4);
-    if (step > scale * 0.55) reasons.push("Shoulder movement velocity inconsistent with recent frames");
+    // Ignore whole-torso translations: if the opposite shoulder moved similarly, this is lean/shift not corruption.
+    const otherStep = other && anatomy ? dist(other, side === "left" ? anatomy.rightShoulder : anatomy.leftShoulder) : null;
+    const torsoShift = otherStep != null && Math.abs(step - otherStep) < scale * 0.25 && step > scale * 0.2;
+    if (step > scale * 0.55 && !torsoShift) reasons.push("Shoulder movement velocity inconsistent with recent frames");
   }
 
-  // Axis-jump only implicates this shoulder if it itself moved a lot. Otherwise a
-  // chin-snapped opposite landmark would falsely invalidate the good anchor.
+  // Axis-jump alone is normal during real rotation. Only implicate this shoulder when
+  // the axis jump coincides with local anatomical collapse (chin snap), not a rigid turn.
   if (
     lastTrusted &&
     input.lastAxisDeg != null &&
@@ -247,7 +257,15 @@ export function evaluateShoulderTrust(input: {
     Math.abs(wrapDeg(input.axisDegNow - input.lastAxisDeg)) > config.shoulderAxisJumpDeg
   ) {
     const scale = anatomy?.shoulderWidth ?? 0.2;
-    if (dist(shoulder, lastTrusted) > scale * 0.2) {
+    const moved = dist(shoulder, lastTrusted) > scale * 0.2;
+    const localCollapse = reasons.some(
+      (reason) =>
+        reason.includes("ear") ||
+        reason.includes("nose") ||
+        reason.includes("Upper-arm") ||
+        reason.includes("centerline")
+    );
+    if (moved && localCollapse) {
       reasons.push("Shoulder axis changed dramatically between frames");
     }
   }

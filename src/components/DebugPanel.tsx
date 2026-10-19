@@ -68,33 +68,34 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Algorithm" value={snapshot ? ALGORITHM_INFO[snapshot.algorithm].label : "—"} />
               <Item label="Frame rate" value={snapshot ? String(snapshot.fps) : "—"} />
               <Item label="Record" value={recorder ? `${recorder.phase} · pose ${recorder.poseFps} · video ${recorder.recordFps}` : "—"} />
-              <Item label="RAW ROM (MediaPipe ungated)" value={deg(snapshot?.rom.raw)} />
-              <Item label="SMOOTHED HYBRID ROM" value={deg(snapshot?.rom.filtered)} />
-              <Item label="ACCEPTED ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
-              <Item label="MAX ACCEPTED ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
+              <Item label="Tracking Mode" value={snapshot?.trackingMode ?? "—"} />
+              <Item label="Observed Raw ROM" value={snapshot?.trackingMode === "OCCLUSION_ASSISTED" ? "unavailable" : deg(snapshot?.observedRawRom)} />
+              <Item label="Last Reliable ROM" value={deg(snapshot?.lastReliableRom)} />
+              <Item label="Occlusion Delta ROM" value={deg(snapshot?.occlusionDeltaRom)} />
+              <Item label="Hybrid ROM" value={deg(snapshot?.hybridRom)} />
+              <Item label="Smoothed Hybrid" value={deg(snapshot?.rom.filtered)} />
+              <Item label="Final / Accepted ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
+              <Item label="Estimated shoulder used for absolute 3D ROM" value={snapshot?.estimatedShoulderUsedForAbsolute3d ? "YES" : "NO"} />
+              <Item label="Visible Shoulder" value={snapshot ? snapshot.anchorShoulder.toUpperCase() : "—"} />
+              <Item label="Hidden Shoulder" value={snapshot ? snapshot.occludedShoulder.toUpperCase() : "—"} />
+              <Item label="Rotation Direction" value={snapshot ? snapshot.direction.toUpperCase() : "—"} />
+              <Item label="MOVEMENT VALIDITY" value={snapshot?.movementStarted ? (snapshot.movementValid ? "PASS" : "FAIL") : "—"} />
+              <Item label="TRACKING CONFIDENCE" value={snapshot ? `${snapshot.trackingBand.toUpperCase()} (${snapshot.trackingScore}%)` : "—"} />
+              <Item label="Occlusion state" value={snapshot?.occlusionLabel ?? "—"} />
+              <Item label="Rejected" value={snapshot?.rejectReason || "—"} />
+              <Item label="Diagnostic MediaPipe 3D (both sides, may be corrupt)" value={deg(snapshot?.mediaPipeRawRom)} />
+              <Item label="Hybrid peak" value={deg(snapshot?.movementStarted ? snapshot.rom.rawPeak : null)} />
+              <Item label="Smoothed peak" value={deg(snapshot?.movementStarted ? snapshot.rom.filteredPeak : null)} />
               <Item label="Gated ROM (diagnostic)" value={deg(snapshot?.gatedRom)} />
               <Item label="Shoulder−pelvis ROM" value={deg(snapshot?.shoulderMinusPelvisRom)} />
               <Item label="Depth-assisted ROM" value={deg(snapshot?.depthAssistedRom)} />
               <Item label="Landmark-smoothed rotation" value={deg(snapshot?.rom.landmarkSmoothed)} />
-              <Item label="Raw peak" value={deg(snapshot?.movementStarted ? snapshot.rom.rawPeak : null)} />
-              <Item label="Smoothed peak" value={deg(snapshot?.movementStarted ? snapshot.rom.filteredPeak : null)} />
               <Item label="Shoulder axis angle" value={deg(snapshot?.rawShoulderYawDeg)} />
               <Item label="Pelvis axis angle" value={deg(snapshot?.rawPelvisYawDeg)} />
               <Item label="Relative rotation" value={deg(snapshot?.relativeRotationDeg)} />
               <Item label="Baseline relative" value={deg(snapshot?.baselineRelativeDeg)} />
               <Item label="Baseline shoulder yaw" value={deg(snapshot?.neutralShoulderYawDeg)} />
               <Item label="Baseline pelvis yaw" value={deg(snapshot?.neutralPelvisYawDeg)} />
-              <Item label="Rotation Direction" value={snapshot ? snapshot.direction.toUpperCase() : "—"} />
-              <Item label="Anchor Shoulder" value={snapshot ? snapshot.anchorShoulder.toUpperCase() : "—"} />
-              <Item label="Occluded Shoulder" value={snapshot ? snapshot.occludedShoulder.toUpperCase() : "—"} />
-              <Item label="Tracking Mode" value={snapshot?.trackingMode ?? "—"} />
-              <Item label="MOVEMENT VALIDITY" value={snapshot?.movementStarted ? (snapshot.movementValid ? "PASS" : "FAIL") : "—"} />
-              <Item label="TRACKING CONFIDENCE" value={snapshot ? `${snapshot.trackingBand.toUpperCase()} (${snapshot.trackingScore}%)` : "—"} />
-              <Item label="Occlusion state" value={snapshot?.occlusionLabel ?? "—"} />
-              <Item label="Rejected" value={snapshot?.rejectReason || "—"} />
-              <Item label="MediaPipe Raw Shoulder ROM" value={deg(snapshot?.mediaPipeRawRom)} />
-              <Item label="Corrected Hybrid ROM" value={deg(snapshot?.hybridRom)} />
-              <Item label="Accepted ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
               <Item label="LEFT anatomical validity" value={trustLabel(snapshot?.leftShoulderTrust)} />
               <Item label="LEFT rejection reasons" value={reasonList(snapshot?.leftShoulderTrust)} />
               <Item label="LEFT using" value={snapshot?.leftShoulderTrust?.using?.toUpperCase() ?? "—"} />

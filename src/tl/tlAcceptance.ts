@@ -132,7 +132,7 @@ export function evaluateAcceptance(input: {
 }): AcceptanceFrame {
   const rejected = input.hardPersistFailed ? movementReject(input.checks) : null;
   const movementValid = rejected == null;
-  const tracked = scoreTracking(input.vis, input.config, input.farLowForMs, movementValid, input.spike, input.mode ?? "REAL_BOTH_SHOULDERS");
+  const tracked = scoreTracking(input.vis, input.config, input.farLowForMs, movementValid, input.spike, input.mode ?? "TWO_SHOULDER_OBSERVED");
   let rejectReason = "";
   if (input.spike) rejectReason = "Large landmark jump";
   else if (rejected) rejectReason = rejected.message || rejected.label;

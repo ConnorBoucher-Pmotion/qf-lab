@@ -14,6 +14,7 @@ import {
 import { handPosture, handsSettled, postureChecks, presentedHand, setupChecks, trialChecks, grade } from "./tlCompensation";
 import { CAMERA_NOTE, type TLConfig } from "./tlConfig";
 import { trackingConfidence } from "./tlQuality";
+import { confirmPeak, OcclusionRomTracker } from "./tlOcclusionRom";
 import { ShoulderAssist } from "./tlShoulderAssist";
 import {
   ROTATION_ALGORITHMS,
@@ -151,7 +152,8 @@ export class TLSession {
   private frameTimes: number[] = [];
   private direction: RotationDirection;
   private shoulderAssist = new ShoulderAssist();
-  private lastTrackingMode: "REAL_BOTH_SHOULDERS" | "OCCLUSION_ASSISTED" = "REAL_BOTH_SHOULDERS";
+  private occlusionRom = new OcclusionRomTracker();
+  private lastTrackingMode: "TWO_SHOULDER_OBSERVED" | "OCCLUSION_ASSISTED" = "TWO_SHOULDER_OBSERVED";
 
   constructor(
     private config: TLConfig,
@@ -228,7 +230,8 @@ export class TLSession {
     this.poseFilter.reset();
     this.angleFilter.reset();
     this.shoulderAssist.reset();
-    this.lastTrackingMode = "REAL_BOTH_SHOULDERS";
+    this.occlusionRom.reset();
+    this.lastTrackingMode = "TWO_SHOULDER_OBSERVED";
     this.ema = null;
     this.lastFiltered = null;
     this.lastAccepted = null;
@@ -251,33 +254,44 @@ export class TLSession {
     this.lastT = now;
     this.frameTimes.push(now);
     this.frameTimes = this.frameTimes.filter((t) => now - t < 1000);
-    // MediaPipe Raw stays on original landmarks for comparison. Hybrid ROM uses anatomically
-    // validated shoulders (reconstructed when the rotation-side landmark snaps to the neck).
+    // Shoulder assist is for visualization + anatomical trust only. Estimated shoulders
+    // never enter the absolute 3D ROM formula — that caused the ~87° spike.
     const assist = this.shoulderAssist.apply(frame.world, frame.image, this.direction, now, this.config);
-    this.lastTrackingMode = assist.mode;
-    const measureWorld = assist.world;
-    const measureImage = assist.image;
-    const filtered = measureWorld.length >= 33 && measureImage.length >= 33 ? this.poseFilter.apply(measureImage, measureWorld, now) : null;
+    const vizImage = assist.assisted ? assist.image : frame.image;
+    const filtered = frame.world.length >= 33 && frame.image.length >= 33 ? this.poseFilter.apply(frame.image, frame.world, now) : null;
     const gatedImage = filtered?.gatedImage ?? [];
     const gatedWorld = filtered?.gatedWorld ?? [];
     const smoothedImage = filtered?.image ?? [];
     const smoothedWorld = filtered?.world ?? [];
-    const mediaPipeReading = frame.world.length >= 33 ? readRotation(frame.world, frame.image, this.baseline?.yaws ?? null) : null;
-    const hybridReading = measureWorld.length >= 33 ? readRotation(measureWorld, measureImage, this.baseline?.yaws ?? null) : null;
+    const observedReading = frame.world.length >= 33 ? readRotation(frame.world, frame.image, this.baseline?.yaws ?? null) : null;
     const gatedReading = gatedWorld.length >= 33 ? readRotation(gatedWorld, gatedImage, this.baseline?.yaws ?? null) : null;
     const smoothedReading = smoothedWorld.length >= 33 ? readRotation(smoothedWorld, smoothedImage, this.baseline?.yaws ?? null) : null;
-    const tracking = this.tracking(frame.world, dt, assist.mode, assist.left.trusted || assist.right.trusted);
-    const mediaPipeRawRom = directionalRom(mediaPipeReading?.torsoPelvisDeg ?? null, this.direction);
-    const hybridRom = directionalRom(hybridReading?.torsoPelvisDeg ?? null, this.direction);
-    const signedHybrid = hybridReading?.torsoPelvisDeg ?? null;
+    const bothObservedTrusted =
+      assist.left.trusted && assist.right.trusted && assist.left.anatomicalValid && assist.right.anatomicalValid;
+    // Only feed gold-standard observed ROM when both shoulders are trusted. Otherwise null.
+    const observedForTracker = bothObservedTrusted ? directionalRom(observedReading?.torsoPelvisDeg ?? null, this.direction) : null;
+    const romTrack = this.occlusionRom.update({
+      world: frame.world,
+      direction: this.direction,
+      now,
+      dtMs: dt,
+      bothObservedTrusted,
+      observedRawRom: observedForTracker,
+      config: this.config,
+    });
+    this.lastTrackingMode = romTrack.mode;
+    const tracking = this.tracking(frame.world, dt, romTrack.mode, assist.left.trusted || assist.right.trusted);
+    const observedRawRom = romTrack.observedRawRom;
+    const hybridRom = romTrack.hybridRom;
+    const mediaPipeRawRom = directionalRom(observedReading?.torsoPelvisDeg ?? null, this.direction);
+    const signedHybrid = hybridRom;
     const signedSmoothed = smoothedReading?.torsoPelvisDeg ?? null;
     const angleSmooth = tracking.present ? this.smooth(signedHybrid, now) : { raw: signedHybrid, filtered: this.lastFiltered };
-    const rawRom = hybridRom;
-    const current = directionalRom(angleSmooth.filtered, this.direction);
+    const current = angleSmooth.filtered;
     const gatedRom = directionalRom(gatedReading?.torsoPelvisDeg ?? null, this.direction);
-    const shoulderMinusPelvis = directionalRom(hybridReading?.legacyDeg ?? null, this.direction);
+    const shoulderMinusPelvis = directionalRom(observedReading?.legacyDeg ?? null, this.direction);
     const velocity = this.velocity(current, dt);
-    const metrics = this.metrics(measureWorld, measureImage, hybridReading, velocity, tracking);
+    const metrics = this.metrics(frame.world, vizImage, observedReading, velocity, tracking);
     const measured = cameraFacing(frame.world);
     const facing: CameraFacing = {
       ...measured,
@@ -286,7 +300,7 @@ export class TLSession {
       status: grade(measured.scoreDeg, this.config.setupFacingWarnDeg, this.config.setupFacingFailDeg),
     };
     const posture = handPosture(frame.world);
-    const setup = this.setup(frame.image, frame.width, frame.height, hybridReading, metrics, facing, posture);
+    const setup = this.setup(frame.image, frame.width, frame.height, observedReading, metrics, facing, posture);
     const checks = this.baseline ? trialChecks(this.compInput(metrics), this.config, posture) : [];
     this.observeChecks(checks, now);
     const movementHard = this.movementStarted && checks.some((check) => check.category === "hard" && check.status === "fail" && check.id !== "hands-behind");
@@ -297,7 +311,10 @@ export class TLSession {
     const soft = Math.max(0.12, this.config.landmarkConfidence * 0.45);
     const occludedCorrupted = (assist.roles.occluded === "left" ? assist.left : assist.right).status === "corrupted";
     this.farLowFor = vis.occludedShoulder < soft || occludedCorrupted ? this.farLowFor + dt : 0;
-    const spike = this.movementStarted && hybridRom != null && isAngleSpike(this.lastSpikeRom, hybridRom, dt, this.config.maxAngleJumpDeg, this.config.maxAngularVelocityDegPerSec);
+    const spike =
+      this.movementStarted &&
+      hybridRom != null &&
+      isAngleSpike(this.lastSpikeRom, hybridRom, dt, this.config.maxAngleJumpDeg, this.config.maxAngularVelocityDegPerSec);
     const acceptance = evaluateAcceptance({
       checks,
       vis,
@@ -306,7 +323,7 @@ export class TLSession {
       direction: this.direction,
       spike,
       hardPersistFailed: hardFailed,
-      mode: assist.mode,
+      mode: romTrack.mode,
     });
     if (acceptance.occlusion === "expected-far-shoulder" || acceptance.occlusion === "prolonged" || occludedCorrupted) this.occlusionSeen = true;
     const thumbUp = frame.thumbUp === true || (frame.gestureReady === false && presentedHand(frame.world));
@@ -314,7 +331,7 @@ export class TLSession {
       now,
       dt,
       current,
-      raw: rawRom,
+      raw: hybridRom,
       velocity,
       tracking,
       setup,
@@ -323,14 +340,14 @@ export class TLSession {
       metrics,
       image: frame.image,
       world: frame.world,
-      reading: hybridReading,
+      reading: observedReading,
       thumbUp,
       posture,
       acceptance,
     });
     this.blockedBy = this.explain(setup, tracking, current);
     const measuring = this.state === "ACTIVE" || this.state === "MEASURING" || this.state === "PEAK" || this.state === "HOLD" || this.state === "TRACKING_LOST";
-    const depthRom = hybridReading?.depthWidthDeg == null ? null : directionalRom(hybridReading.depthWidthDeg, this.direction);
+    const depthRom = observedReading?.depthWidthDeg == null ? null : directionalRom(observedReading.depthWidthDeg, this.direction);
     const baselineRelative = this.baseline?.yaws.relativeYawDeg ?? null;
     const leftUsing = assist.reconstructedSide === "left" ? "reconstructed" : "mediapipe";
     const rightUsing = assist.reconstructedSide === "right" ? "reconstructed" : "mediapipe";
@@ -341,12 +358,12 @@ export class TLSession {
       direction: this.direction,
       algorithm: this.config.algorithm,
       countdownLabel: this.countdownLabel(now),
-      algorithmsLive: this.algorithmRows(hybridReading),
+      algorithmsLive: this.algorithmRows(observedReading),
       neutralShoulderYawDeg: this.baseline?.yaws.shoulderYawDeg ?? null,
       neutralPelvisYawDeg: this.baseline?.yaws.pelvisYawDeg ?? null,
-      shoulderSpanRatio: hybridReading?.shoulderSpanRatio ?? null,
-      imageWidthDeg: hybridReading?.imageWidthDeg ?? null,
-      imageShoulderYawDeg: hybridReading?.imageShoulderYawDeg ?? null,
+      shoulderSpanRatio: observedReading?.shoulderSpanRatio ?? null,
+      imageWidthDeg: observedReading?.imageWidthDeg ?? null,
+      imageShoulderYawDeg: observedReading?.imageShoulderYawDeg ?? null,
       romTestMode: this.config.romTestMode,
       captureRemainingMs: this.captureEndsAt == null ? null : Math.max(0, this.captureEndsAt - now),
       thumbProgress: this.config.thumbStableMs <= 0 ? 0 : Math.max(0, Math.min(1, this.thumbFor / this.config.thumbStableMs)),
@@ -356,8 +373,8 @@ export class TLSession {
         ? ""
         : acceptance.rejectReason
           ? acceptance.rejectReason
-          : assist.mode === "OCCLUSION_ASSISTED" || acceptance.occlusion === "expected-far-shoulder"
-            ? `Movement valid · ${occludedCorrupted ? "SHOULDER_CORRUPTED" : "expected occlusion"} · ${assist.mode}`
+          : romTrack.mode === "OCCLUSION_ASSISTED" || acceptance.occlusion === "expected-far-shoulder"
+            ? `Movement valid · ${occludedCorrupted ? "SHOULDER_CORRUPTED" : "expected occlusion"} · ${romTrack.mode}`
             : "Movement valid",
       movementValid: acceptance.movementValid,
       trackingBand: acceptance.band,
@@ -374,8 +391,12 @@ export class TLSession {
       rightShoulderVisibility: vis.rightShoulder,
       leftHipVisibility: vis.leftHip,
       rightHipVisibility: vis.rightHip,
-      mediaPipeRawRom,
+      observedRawRom,
+      lastReliableRom: romTrack.lastReliableRom,
+      occlusionDeltaRom: romTrack.mode === "OCCLUSION_ASSISTED" ? romTrack.deltaRom : null,
       hybridRom,
+      mediaPipeRawRom,
+      estimatedShoulderUsedForAbsolute3d: false,
       leftShoulderTrust: {
         side: "left",
         visibility: assist.left.visibility,
@@ -395,18 +416,18 @@ export class TLSession {
         using: rightUsing,
       },
       mediaPipeShoulderAxis: axisImage(frame.image, LM.leftShoulder, LM.rightShoulder),
-      correctedShoulderAxis: axisImage(measureImage, LM.leftShoulder, LM.rightShoulder),
+      correctedShoulderAxis: axisImage(vizImage, LM.leftShoulder, LM.rightShoulder),
       mediaPipeLeftShoulderImage: xyOf(frame.image, LM.leftShoulder),
       mediaPipeRightShoulderImage: xyOf(frame.image, LM.rightShoulder),
-      correctedLeftShoulderImage: xyOf(measureImage, LM.leftShoulder),
-      correctedRightShoulderImage: xyOf(measureImage, LM.rightShoulder),
+      correctedLeftShoulderImage: xyOf(vizImage, LM.leftShoulder),
+      correctedRightShoulderImage: xyOf(vizImage, LM.rightShoulder),
       depthAssistedRom: depthRom,
       gatedRom,
       shoulderMinusPelvisRom: shoulderMinusPelvis,
-      relativeRotationDeg: hybridReading?.torsoPelvisDeg ?? null,
+      relativeRotationDeg: observedReading?.torsoPelvisDeg ?? null,
       baselineRelativeDeg: baselineRelative,
-      rawShoulderYawDeg: hybridReading?.shoulderYawDeg ?? null,
-      rawPelvisYawDeg: hybridReading?.pelvisYawDeg ?? null,
+      rawShoulderYawDeg: observedReading?.shoulderYawDeg ?? null,
+      rawPelvisYawDeg: observedReading?.pelvisYawDeg ?? null,
       smoothedShoulderYawDeg: smoothedReading?.shoulderYawDeg ?? null,
       smoothedPelvisYawDeg: smoothedReading?.pelvisYawDeg ?? null,
       metrics,
@@ -416,8 +437,8 @@ export class TLSession {
       cameraFacing: facing,
       rom: {
         current: hybridRom,
-        /** True MediaPipe ungated ROM — may collapse when the landmark snaps to the neck. */
-        raw: mediaPipeRawRom,
+        /** Observed Raw when both trusted; otherwise unavailable (null via hybrid display path). */
+        raw: observedRawRom,
         landmarkSmoothed: signedSmoothed == null ? null : directionalRom(signedSmoothed, this.direction),
         filtered: current,
         active: !this.movementStarted ? null : this.result ? this.validPeak : hybridRom,
@@ -441,7 +462,7 @@ export class TLSession {
       quality: Math.round(acceptance.score * 100) || trackingConfidence(tracking.score, checks.filter((check) => check.status === "warn").length, hardFailed ? 1 : 0, false),
       result: this.result,
       events: this.bakedEvents(),
-      imagePose: smoothedImage.length >= 33 ? smoothedImage : frame.image,
+      imagePose: vizImage.length >= 33 ? vizImage : smoothedImage.length >= 33 ? smoothedImage : frame.image,
       rawPose: frame.image,
       reference: this.referenceLine(frame.image),
       fps: this.frameTimes.length,
@@ -577,6 +598,7 @@ export class TLSession {
     now: number,
     spiked: boolean
   ): void {
+    // raw here is Hybrid ROM (observed when both trusted, incremental during occlusion).
     if (raw != null && (this.rawPeak == null || raw > this.rawPeak)) {
       this.rawPeak = raw;
       this.atRaw = compOf(metrics);
@@ -587,9 +609,11 @@ export class TLSession {
     const sample = raw ?? current;
     if (sample == null) return;
     if (!spiked) this.lastSpikeRom = sample;
-    // Accepted peaks come from Raw ROM only. Confidence decides trust, not a different angle.
+    // Validity is TRUST/DON'T TRUST on Hybrid — never a reduced angle.
     if (acceptance.acceptPeak && raw != null) {
-      if (this.validPeak == null || raw > this.validPeak) {
+      const neighbors = this.occlusionRom.recentSamples();
+      const confirmed = confirmPeak(neighbors, raw, this.config.hybridPeakAgreeDeg) || neighbors.length < 3;
+      if (confirmed && (this.validPeak == null || raw > this.validPeak)) {
         this.validPeak = raw;
         this.atValid = compOf(metrics);
       }
@@ -597,11 +621,14 @@ export class TLSession {
       return;
     }
     if (acceptance.candidateOnly && raw != null) {
-      const next = updateCandidate(this.candidate, raw, now, 450, 2.5);
+      const next = updateCandidate(this.candidate, raw, now, 450, this.config.hybridPeakAgreeDeg);
       this.candidate = next.candidate;
       if (next.promoted != null && (this.validPeak == null || next.promoted > this.validPeak)) {
-        this.validPeak = next.promoted;
-        this.atValid = compOf(metrics);
+        const neighbors = this.occlusionRom.recentSamples();
+        if (confirmPeak(neighbors, next.promoted, this.config.hybridPeakAgreeDeg) || neighbors.length < 3) {
+          this.validPeak = next.promoted;
+          this.atValid = compOf(metrics);
+        }
       }
     }
   }
@@ -683,7 +710,7 @@ export class TLSession {
     this.scoreSum = 0;
     this.scoreN = 0;
     this.lastSpikeRom = null;
-    this.lastTrackingMode = "REAL_BOTH_SHOULDERS";
+    this.lastTrackingMode = "TWO_SHOULDER_OBSERVED";
     this.movementStarted = true;
     this.rotationStartedAt = now;
     this.activeFor = 0;
@@ -890,7 +917,7 @@ export class TLSession {
   private tracking(
     world: Vec[],
     dt: number,
-    mode: "REAL_BOTH_SHOULDERS" | "OCCLUSION_ASSISTED" = "REAL_BOTH_SHOULDERS",
+    mode: "TWO_SHOULDER_OBSERVED" | "OCCLUSION_ASSISTED" = "TWO_SHOULDER_OBSERVED",
     anchorTrusted = true
   ): TrackingStatus {
     const min = this.config.landmarkConfidence;
@@ -1087,7 +1114,7 @@ export class TLSession {
     this.scoreSum = 0;
     this.scoreN = 0;
     this.lastSpikeRom = null;
-    this.lastTrackingMode = "REAL_BOTH_SHOULDERS";
+    this.lastTrackingMode = "TWO_SHOULDER_OBSERVED";
     this.activeFor = 0;
     this.algoPeaks = emptyAlgoPeaks();
     this.filteredPeak = null;

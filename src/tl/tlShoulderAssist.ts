@@ -11,7 +11,7 @@ import type { TLConfig } from "./tlConfig";
 import type { RotationDirection } from "./tlTypes";
 
 export type ShoulderSide = "left" | "right";
-export type TrackingMode = "REAL_BOTH_SHOULDERS" | "OCCLUSION_ASSISTED";
+export type TrackingMode = "TWO_SHOULDER_OBSERVED" | "OCCLUSION_ASSISTED";
 
 export type ShoulderRoles = {
   anchor: ShoulderSide;
@@ -120,7 +120,7 @@ export class ShoulderAssist {
       return {
         world,
         image,
-        mode: "REAL_BOTH_SHOULDERS",
+        mode: "TWO_SHOULDER_OBSERVED",
         assisted: false,
         roles,
         left: emptyTrust("left"),
@@ -215,7 +215,7 @@ export class ShoulderAssist {
       return {
         world: nextWorld,
         image: nextImage,
-        mode: this.blendFrom ? "OCCLUSION_ASSISTED" : "REAL_BOTH_SHOULDERS",
+        mode: this.blendFrom ? "OCCLUSION_ASSISTED" : "TWO_SHOULDER_OBSERVED",
         assisted: this.blendFrom != null,
         roles,
         left: leftTrust,
@@ -236,7 +236,7 @@ export class ShoulderAssist {
       return {
         world,
         image,
-        mode: "REAL_BOTH_SHOULDERS",
+        mode: "TWO_SHOULDER_OBSERVED",
         assisted: false,
         roles,
         left: leftTrust,

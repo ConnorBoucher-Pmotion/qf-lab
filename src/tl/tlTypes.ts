@@ -160,15 +160,22 @@ export type TLSnapshot = {
   anchorShoulder: "left" | "right";
   /** RIGHT for right rotation; LEFT for left rotation. */
   occludedShoulder: "left" | "right";
-  trackingMode: "REAL_BOTH_SHOULDERS" | "OCCLUSION_ASSISTED";
+  trackingMode: "TWO_SHOULDER_OBSERVED" | "OCCLUSION_ASSISTED";
   leftShoulderVisibility: number;
   rightShoulderVisibility: number;
   leftHipVisibility: number;
   rightHipVisibility: number;
-  /** Ungated MediaPipe torso–pelvis ROM (may include corrupted shoulder). */
-  mediaPipeRawRom: number | null;
-  /** ROM after anatomical shoulder reconstruction. */
+  /** Gold-standard 3D ROM while both shoulders are observed+trusted. Null during occlusion. */
+  observedRawRom: number | null;
+  /** Locked observed ROM at occlusion handoff. */
+  lastReliableRom: number | null;
+  /** Additional directional rotation since handoff. */
+  occlusionDeltaRom: number | null;
+  /** lastReliable + delta (or observed). Never from estimated-shoulder 3D. */
   hybridRom: number | null;
+  /** Legacy alias: corrupted MediaPipe both-shoulder 3D (diagnostic only). */
+  mediaPipeRawRom: number | null;
+  estimatedShoulderUsedForAbsolute3d: boolean;
   leftShoulderTrust: ShoulderTrustDebug | null;
   rightShoulderTrust: ShoulderTrustDebug | null;
   /** Image-space MediaPipe shoulder axis (raw). */
