@@ -46,6 +46,14 @@ export type TLConfig = {
   angleOutlierDeg: number;
   landmarkConfidence: number;
   confidenceGraceMs: number;
+  /** How long a dim far shoulder may stay held before confidence drops to LOW. */
+  occlusionHoldMs: number;
+  /** Reject a single-frame ROM change larger than this. */
+  maxAngleJumpDeg: number;
+  /** Reject angular speed above this (°/s). Natural rotation is usually well below. */
+  maxAngularVelocityDegPerSec: number;
+  /** Development-only camera offset guide. Does not change the angle math. */
+  cameraGuideOffsetDeg: number;
   trackingLostMs: number;
   trackingResetMs: number;
   pelvisRotationWarnDeg: number;
@@ -109,6 +117,10 @@ export const TL_CONFIG: TLConfig = {
   angleOutlierDeg: 30,
   landmarkConfidence: 0.4,
   confidenceGraceMs: 150,
+  occlusionHoldMs: 550,
+  maxAngleJumpDeg: 18,
+  maxAngularVelocityDegPerSec: 220,
+  cameraGuideOffsetDeg: 0,
   trackingLostMs: 400,
   trackingResetMs: 2500,
   pelvisRotationWarnDeg: 7,
@@ -249,6 +261,10 @@ export const TL_CONFIG_FIELDS: ConfigField[] = [
   r("setupFacingFailDeg", "Facing camera failure threshold", "Setup", 10, 60, 1, "deg"),
   { kind: "toggle", key: "bypassFaceCamera", label: "Bypass Face Camera constraint", group: "Setup" },
   r("hardFailPersistMs", "Compensation must last before it counts", "Setup", 0, 1000, 50, "ms"),
+  r("occlusionHoldMs", "Far-shoulder occlusion hold", "Tracking", 200, 1000, 50, "ms"),
+  r("maxAngleJumpDeg", "Max ROM jump per frame", "Tracking", 6, 40, 1, "deg"),
+  r("maxAngularVelocityDegPerSec", "Max angular velocity", "Tracking", 80, 400, 10, "deg/s"),
+  r("cameraGuideOffsetDeg", "Camera offset guide (dev)", "Setup", 0, 20, 5, "deg"),
 ];
 
 type NumericKey = RangeField["key"];

@@ -2,6 +2,15 @@ import { dist3, median, midpoint, stdev } from "../pose/coordinateNormalization"
 import { PoseFilter } from "../pose/landmarkFiltering";
 import { OneEuroFilter } from "../pose/oneEuro";
 import { LM, type Vec } from "../pose/types";
+import {
+  evaluateAcceptance,
+  isAngleSpike,
+  landmarkVis,
+  occlusionLabel,
+  trialQuality,
+  updateCandidate,
+  type CandidatePeak,
+} from "./tlAcceptance";
 import { handPosture, handsSettled, postureChecks, presentedHand, setupChecks, trialChecks, grade } from "./tlCompensation";
 import { CAMERA_NOTE, type TLConfig } from "./tlConfig";
 import { trackingConfidence } from "./tlQuality";
@@ -93,6 +102,7 @@ export class TLSession {
   private ema: number | null = null;
   private lastFiltered: number | null = null;
   private lastAccepted: number | null = null;
+  private lastSpikeRom: number | null = null;
   private outlierRun = 0;
   private state: TLStateName = "SEARCHING";
   private baseline: Baseline | null = null;
@@ -108,6 +118,11 @@ export class TLSession {
   private rawPeak: number | null = null;
   private filteredPeak: number | null = null;
   private validPeak: number | null = null;
+  private candidate: CandidatePeak | null = null;
+  private farLowFor = 0;
+  private occlusionSeen = false;
+  private scoreSum = 0;
+  private scoreN = 0;
   private algoPeaks: Record<RotationAlgorithm, { left: number | null; right: number | null }> = emptyAlgoPeaks();
   private countdownEndsAt: number | null = null;
   private rotateCueAt: number | null = null;
@@ -241,7 +256,8 @@ export class TLSession {
     const smoothedReading = smoothedWorld.length >= 33 ? readRotation(smoothedWorld, smoothedImage, this.baseline?.yaws ?? null) : null;
     const signedRaw = reading?.torsoPelvisDeg ?? null;
     const signedSmoothed = smoothedReading ? primaryAngle(smoothedReading, this.config.algorithm) : null;
-    const smoothed = tracking.criticalOk ? this.smooth(signedRaw, now) : { raw: signedRaw, filtered: this.lastFiltered };
+    const smoothed = tracking.present ? this.smooth(signedRaw, now) : { raw: signedRaw, filtered: this.lastFiltered };
+    const rawRom = directionalRom(smoothed.raw, this.direction);
     const current = directionalRom(smoothed.filtered, this.direction);
     const velocity = this.velocity(current, dt);
     const metrics = this.metrics(world, image, reading, velocity, tracking);
@@ -256,15 +272,46 @@ export class TLSession {
     const setup = this.setup(image, frame.width, frame.height, reading, metrics, facing, posture);
     const checks = this.baseline ? trialChecks(this.compInput(metrics), this.config, posture) : [];
     this.observeChecks(checks, now);
-    if (this.movementStarted) this.failFor = checks.some((check) => check.category === "hard" && check.status === "fail") ? this.failFor + dt : 0;
+    const movementHard = this.movementStarted && checks.some((check) => check.category === "hard" && check.status === "fail" && check.id !== "hands-behind");
+    if (this.movementStarted) this.failFor = movementHard ? this.failFor + dt : 0;
     else this.failFor = 0;
-    const hardNow = this.movementStarted && checks.some((check) => check.category === "hard" && check.status === "fail");
-    const hardFailed = hardNow && this.failFor >= this.config.hardFailPersistMs;
+    const hardFailed = movementHard && this.failFor >= this.config.hardFailPersistMs;
+    const vis = landmarkVis(world);
+    const soft = Math.max(0.12, this.config.landmarkConfidence * 0.45);
+    this.farLowFor = vis.farShoulder < soft ? this.farLowFor + dt : 0;
+    const spike = this.movementStarted && rawRom != null && isAngleSpike(this.lastSpikeRom, rawRom, dt, this.config.maxAngleJumpDeg, this.config.maxAngularVelocityDegPerSec);
+    const acceptance = evaluateAcceptance({
+      checks,
+      vis,
+      config: this.config,
+      farLowForMs: this.farLowFor,
+      direction: this.direction,
+      spike,
+      hardPersistFailed: hardFailed,
+    });
+    if (acceptance.occlusion === "expected-far-shoulder" || acceptance.occlusion === "prolonged") this.occlusionSeen = true;
     const thumbUp = frame.thumbUp === true || (frame.gestureReady === false && presentedHand(world));
-    this.advance({ now, dt, current, raw: directionalRom(smoothed.raw, this.direction), velocity, tracking, setup, hardFailed, hardNow, metrics, image, world, reading, thumbUp, posture });
+    this.advance({
+      now,
+      dt,
+      current,
+      raw: rawRom,
+      velocity,
+      tracking,
+      setup,
+      hardFailed,
+      hardNow: movementHard,
+      metrics,
+      image,
+      world,
+      reading,
+      thumbUp,
+      posture,
+      acceptance,
+    });
     this.blockedBy = this.explain(setup, tracking, current);
     const measuring = this.state === "ACTIVE" || this.state === "MEASURING" || this.state === "PEAK" || this.state === "HOLD" || this.state === "TRACKING_LOST";
-    const failing = checks.find((check) => check.category === "hard" && check.status === "fail");
+    const depthRom = reading?.depthWidthDeg == null ? null : directionalRom(reading.depthWidthDeg, this.direction);
 
     return {
       state: this.state,
@@ -283,7 +330,24 @@ export class TLSession {
       thumbProgress: this.config.thumbStableMs <= 0 ? 0 : Math.max(0, Math.min(1, this.thumbFor / this.config.thumbStableMs)),
       thumbSeen: this.thumbSeen,
       canStart: this.readyOpen,
-      movementMessage: !this.movementStarted ? "" : hardFailed && failing ? failing.message : hardNow && failing ? `${failing.label} — confirming` : "Movement valid",
+      movementMessage: !this.movementStarted
+        ? ""
+        : acceptance.rejectReason
+          ? acceptance.rejectReason
+          : acceptance.occlusion === "expected-far-shoulder"
+            ? "Movement valid · expected far-shoulder occlusion"
+            : "Movement valid",
+      movementValid: acceptance.movementValid,
+      trackingBand: acceptance.band,
+      trackingScore: Math.round(acceptance.score * 100),
+      occlusionState: acceptance.occlusion,
+      occlusionLabel: occlusionLabel(acceptance.occlusion, this.direction),
+      rejectReason: acceptance.rejectReason,
+      leftShoulderVisibility: vis.leftShoulder,
+      rightShoulderVisibility: vis.rightShoulder,
+      leftHipVisibility: vis.leftHip,
+      rightHipVisibility: vis.rightHip,
+      depthAssistedRom: depthRom,
       rawShoulderYawDeg: reading?.shoulderYawDeg ?? null,
       rawPelvisYawDeg: reading?.pelvisYawDeg ?? null,
       smoothedShoulderYawDeg: smoothedReading?.shoulderYawDeg ?? null,
@@ -316,7 +380,7 @@ export class TLSession {
       poseLoop: "active",
       lastPoseAt: now,
       hardFailed,
-      quality: trackingConfidence(tracking.score, checks.filter((check) => check.status === "warn").length, hardFailed ? 1 : 0, false),
+      quality: Math.round(acceptance.score * 100) || trackingConfidence(tracking.score, checks.filter((check) => check.status === "warn").length, hardFailed ? 1 : 0, false),
       result: this.result,
       events: this.bakedEvents(),
       imagePose: smoothedImage.length >= 33 ? smoothedImage : image,
@@ -343,9 +407,10 @@ export class TLSession {
     reading: RotationReading | null;
     thumbUp: boolean;
     posture: ReturnType<typeof handPosture>;
+    acceptance: ReturnType<typeof evaluateAcceptance>;
   }): void {
     if (this.result && (this.state === "COMPLETE" || this.state === "INVALID")) return;
-    const { now, dt, current, raw, tracking, setup, hardFailed, metrics, image, world, reading, thumbUp, posture } = input;
+    const { now, dt, current, raw, tracking, setup, metrics, image, world, reading, thumbUp, posture, acceptance } = input;
     if (!tracking.present) {
       this.state = "SEARCHING";
       if (!this.config.romTestMode && this.weakFor > this.config.trackingResetMs) {
@@ -360,10 +425,15 @@ export class TLSession {
         this.state = "READY";
         return;
       }
-      if (this.weakFor < this.config.trackingLostMs) return;
       if (this.movementStarted) {
+        // Expected far-shoulder occlusion keeps criticalOk true; only real loss pauses here.
+        if (this.weakFor < this.config.trackingLostMs) {
+          this.updatePeaks(raw, current, metrics, acceptance, now, false);
+          this.state = "ACTIVE";
+          return;
+        }
         this.state = "TRACKING_LOST";
-        if (!this.config.romTestMode && this.weakFor > this.config.trackingResetMs) this.finish(false, now, "Tracking was lost before the hold was confirmed.");
+        if (!this.config.romTestMode && this.weakFor > this.config.trackingResetMs) this.finish(false, now, "Tracking was lost before the capture window ended.");
       } else if (this.weakFor > this.config.trackingResetMs) {
         this.baseline = null;
         this.state = "POSITIONING";
@@ -429,15 +499,7 @@ export class TLSession {
     }
     this.activeFor += dt;
     this.noteAlgorithms(reading);
-    if (raw != null && (this.rawPeak == null || raw > this.rawPeak)) {
-      this.rawPeak = raw;
-      this.atRaw = compOf(metrics);
-    }
-    if (current != null && (this.filteredPeak == null || current > this.filteredPeak)) this.filteredPeak = current;
-    if (current != null && !hardFailed && (this.validPeak == null || current > this.validPeak)) {
-      this.validPeak = current;
-      this.atValid = compOf(metrics);
-    }
+    this.updatePeaks(raw, current, metrics, acceptance, now, acceptance.band === "invalid" && acceptance.rejectReason === "Large landmark jump");
     if (this.config.romTestMode) {
       this.state = "MEASURING";
       return;
@@ -447,6 +509,42 @@ export class TLSession {
       return;
     }
     this.state = "ACTIVE";
+  }
+
+  private updatePeaks(
+    raw: number | null,
+    current: number | null,
+    metrics: TLMetrics,
+    acceptance: ReturnType<typeof evaluateAcceptance>,
+    now: number,
+    spiked: boolean
+  ): void {
+    if (raw != null && (this.rawPeak == null || raw > this.rawPeak)) {
+      this.rawPeak = raw;
+      this.atRaw = compOf(metrics);
+    }
+    if (current != null && (this.filteredPeak == null || current > this.filteredPeak)) this.filteredPeak = current;
+    this.scoreSum += acceptance.score;
+    this.scoreN += 1;
+    const sample = raw ?? current;
+    if (sample == null) return;
+    if (!spiked) this.lastSpikeRom = sample;
+    if (acceptance.acceptPeak) {
+      if (this.validPeak == null || sample > this.validPeak) {
+        this.validPeak = sample;
+        this.atValid = compOf(metrics);
+      }
+      this.candidate = null;
+      return;
+    }
+    if (acceptance.candidateOnly) {
+      const next = updateCandidate(this.candidate, sample, now, 450, 2.5);
+      this.candidate = next.candidate;
+      if (next.promoted != null && (this.validPeak == null || next.promoted > this.validPeak)) {
+        this.validPeak = next.promoted;
+        this.atValid = compOf(metrics);
+      }
+    }
   }
 
   private calibrate(now: number, dt: number, setup: ConstraintCheck[], metrics: TLMetrics, image: Vec[], world: Vec[]): void {
@@ -517,6 +615,12 @@ export class TLSession {
     this.thumbSeen = false;
     this.readyOpen = false;
     this.handsHold = false;
+    this.candidate = null;
+    this.farLowFor = 0;
+    this.occlusionSeen = false;
+    this.scoreSum = 0;
+    this.scoreN = 0;
+    this.lastSpikeRom = null;
     this.movementStarted = true;
     this.rotationStartedAt = now;
     this.activeFor = 0;
@@ -543,6 +647,8 @@ export class TLSession {
     this.note(ok ? "Best valid rotation saved" : why, now);
     this.note(ok ? "Assessment complete" : "Assessment stopped", now);
     const failed = [...this.failed];
+    const scorePct = this.scoreN > 0 ? Math.round((this.scoreSum / this.scoreN) * 100) : trackingConfidence(1, this.warned.size, failed.length, false);
+    const quality = trialQuality(scorePct, this.occlusionSeen, ok);
     this.result = {
       version: 1,
       id: `tl-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
@@ -554,7 +660,7 @@ export class TLSession {
       algorithm: "torsoPelvis",
       measuredRom: valid,
       rawMaximum: this.rawPeak,
-      confidence: trackingConfidence(1, this.warned.size, failed.length, false),
+      confidence: scorePct,
       holdMs: this.holdFor || null,
       failedConstraints: failed,
       warningEvents: [...this.warned],
@@ -579,6 +685,9 @@ export class TLSession {
       endChecks: [],
       instruction: ok ? "Capture window complete." : valid == null ? "No valid rotation was captured in that direction." : why,
       preRollMs: 0,
+      trialQuality: quality,
+      qualityNote: this.occlusionSeen ? "Brief expected shoulder occlusion detected" : "",
+      cameraGuideOffsetDeg: this.config.cameraGuideOffsetDeg,
     };
     this.state = accepted || manual ? "COMPLETE" : "INVALID";
   }
@@ -717,18 +826,23 @@ export class TLSession {
 
   private tracking(world: Vec[], dt: number): TrackingStatus {
     const min = this.config.landmarkConfidence;
+    const soft = Math.max(0.12, min * 0.45);
+    const points = landmarkVis(world);
     const vis = (index: number) => world[index]?.visibility ?? 0;
-    const shoulders = world.length >= 33 ? Math.min(vis(LM.leftShoulder), vis(LM.rightShoulder)) : 0;
-    const hips = world.length >= 33 ? Math.min(vis(LM.leftHip), vis(LM.rightHip)) : 0;
+    const hips = Math.min(points.leftHip, points.rightHip);
     const knees = world.length >= 33 ? Math.min(vis(LM.leftKnee), vis(LM.rightKnee)) : 0;
     const ears = world.length >= 33 ? Math.min(vis(LM.leftEar), vis(LM.rightEar)) : 0;
-    const present = shoulders > 0.05 && hips > 0.05;
-    const criticalOk = shoulders >= min && hips >= min && knees >= min;
+    const shoulders = points.nearShoulder;
+    const present = points.nearShoulder > 0.05 && hips > 0.05;
+    // During ACTIVE, knees and the far shoulder may drop without ending the trial.
+    const farOk = points.farShoulder >= soft || (this.movementStarted && this.farLowFor <= this.config.occlusionHoldMs);
+    const criticalOk = present && points.nearShoulder >= soft && hips >= soft && (this.movementStarted ? farOk : points.farShoulder >= min && knees >= min);
     this.weakFor = criticalOk ? 0 : this.weakFor + dt;
+    const score = Math.max(0, Math.min(1, points.nearShoulder * 0.5 + Math.max(points.farShoulder, soft) * 0.2 + hips * 0.3));
     return {
       present,
       criticalOk,
-      score: criticalOk ? Math.max(0, Math.min(1, Math.min(shoulders, hips, knees))) : 0,
+      score: present ? score : 0,
       absentMs: present ? 0 : this.weakFor,
       criticalBadMs: this.weakFor,
       shoulders,
@@ -892,6 +1006,12 @@ export class TLSession {
     this.voiceLatch = false;
     this.handsHold = false;
     this.readyFailFor = 0;
+    this.candidate = null;
+    this.farLowFor = 0;
+    this.occlusionSeen = false;
+    this.scoreSum = 0;
+    this.scoreN = 0;
+    this.lastSpikeRom = null;
     this.activeFor = 0;
     this.algoPeaks = emptyAlgoPeaks();
     this.filteredPeak = null;

@@ -47,12 +47,12 @@ export function QualityIndicator({ snapshot }: { snapshot: TLSnapshot | null }) 
           <dd>{snapshot?.movementStarted ? snapshot.movementMessage || "Movement valid" : "Not capturing"}</dd>
         </div>
         <div>
-          <dt>Tracking</dt>
-          <dd className={`st-${trackingTone(snapshot)}`}>{trackingLabel(snapshot)}</dd>
+          <dt>Accept band</dt>
+          <dd>{snapshot?.movementStarted ? `${snapshot.trackingBand.toUpperCase()} ${snapshot.trackingScore}%` : "—"}</dd>
         </div>
         <div>
-          <dt>Confidence</dt>
-          <dd>{snapshot ? `${snapshot.quality}%` : "—"}</dd>
+          <dt>Pose</dt>
+          <dd className={`st-${trackingTone(snapshot)}`}>{trackingLabel(snapshot)}</dd>
         </div>
       </dl>
       <p className="quality-line">{finished ? "Assessment completed." : state === "ACTIVE" ? "The saved result is the highest angle while movement stayed valid." : confirming && snapshot?.thumbSeen ? "Ready gesture detected — keep holding." : "The live number is not a saved result until the capture window starts."}</p>

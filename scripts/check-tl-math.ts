@@ -1,4 +1,5 @@
 import { isReadyPhrase } from "../src/audio/cues";
+import { evaluateAcceptance, isAngleSpike, landmarkVis, updateCandidate } from "../src/tl/tlAcceptance";
 import { grade } from "../src/tl/tlCompensation";
 import { TL_CONFIG, normalizeConfig } from "../src/tl/tlConfig";
 import { TLSession } from "../src/tl/tlStateMachine";
@@ -399,6 +400,49 @@ while (!resumed.movementStarted && tr < resumeAt + 2500) {
   resumed = returned.push({ width: 1280, height: 720, ...withHands("behind") }, tr);
 }
 if (!resumed.movementStarted || resumed.state !== "ACTIVE") throw new Error(`measurement did not begin after the hands returned (${resumed.state})`);
+
+if (isAngleSpike(34, 58, 33, 18, 220)) {
+  // expected
+} else throw new Error("58° spike was not rejected");
+if (isAngleSpike(34, 35.5, 33, 18, 220)) throw new Error("smooth 1.5° step was treated as a spike");
+
+const cand = updateCandidate(null, 36.1, 0, 450, 2.5);
+const cand2 = updateCandidate(cand.candidate, 35.9, 40, 450, 2.5);
+const cand3 = updateCandidate(cand2.candidate, 36.0, 80, 450, 2.5);
+if (cand3.promoted == null || cand3.promoted < 36) throw new Error(`candidate peak was not promoted (${cand3.promoted})`);
+const spikeCand = updateCandidate(null, 61, 0, 450, 2.5);
+const spikeCand2 = updateCandidate(spikeCand.candidate, 34, 40, 450, 2.5);
+if (spikeCand2.promoted != null) throw new Error("a lone 61° candidate was promoted");
+
+const occluded = new TLSession(normalizeConfig({ ...fast, captureWindowMs: 5000, occlusionHoldMs: 700 }), "right");
+let to = feed(occluded, syntheticSeated(), 40, 0);
+occluded.arm(to);
+to += 33;
+to = feed(occluded, syntheticSeated({ shoulderYawDeg: 28, pelvisYawDeg: 1 }), 8, to);
+for (let i = 0; i < 16; i += 1) {
+  const pose = syntheticSeated({ shoulderYawDeg: 30 + i * 0.4, pelvisYawDeg: 1 });
+  pose.world[LM.leftShoulder] = { ...pose.world[LM.leftShoulder], visibility: 0.16 };
+  pose.image[LM.leftShoulder] = { ...pose.image[LM.leftShoulder], visibility: 0.16 };
+  occluded.push({ width: 1280, height: 720, ...pose }, to);
+  to += 33;
+}
+const duringOcclusion = occluded.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 36, pelvisYawDeg: 1 }) }, to);
+if (duringOcclusion.state === "TRACKING_LOST") throw new Error("expected far-shoulder occlusion ended tracking");
+if ((duringOcclusion.rom.validPeak ?? 0) < 28) throw new Error(`occlusion froze the accepted peak at ${duringOcclusion.rom.validPeak}`);
+if (duringOcclusion.trackingBand === "invalid") throw new Error(`occlusion was treated as invalid (${duringOcclusion.occlusionState})`);
+const scored = evaluateAcceptance({
+  checks: [],
+  vis: { leftShoulder: 0.16, rightShoulder: 0.92, leftHip: 0.9, rightHip: 0.9, nearShoulder: 0.92, farShoulder: 0.16 },
+  config: normalizeConfig({ ...fast, occlusionHoldMs: 700 }),
+  farLowForMs: 200,
+  direction: "right",
+  spike: false,
+  hardPersistFailed: false,
+});
+if (scored.band === "invalid" || (!scored.acceptPeak && !scored.candidateOnly)) {
+  throw new Error(`far-shoulder dimming scored ${scored.band}`);
+}
+void landmarkVis;
 
 const oldFilter = new OneEuroFilter(1.2, 0.04);
 const newFilter = new OneEuroFilter(3, 0.35);

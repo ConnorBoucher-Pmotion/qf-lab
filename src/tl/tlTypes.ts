@@ -89,6 +89,10 @@ export type TLResult = {
   endChecks: ConstraintCheck[];
   instruction: string;
   preRollMs: number;
+  /** Software trial quality. Not a clinical grade. */
+  trialQuality?: "Excellent" | "Good" | "Fair" | "Retest Recommended";
+  qualityNote?: string;
+  cameraGuideOffsetDeg?: number;
 };
 
 export type TrialRecording = {
@@ -136,6 +140,17 @@ export type TLSnapshot = {
   canStart: boolean;
   /** What the user should fix during the capture window. "Movement valid" when the angle can count. */
   movementMessage: string;
+  movementValid: boolean;
+  trackingBand: "high" | "medium" | "low" | "invalid";
+  trackingScore: number;
+  occlusionState: "none" | "expected-far-shoulder" | "prolonged" | "lost";
+  occlusionLabel: string;
+  rejectReason: string;
+  leftShoulderVisibility: number;
+  rightShoulderVisibility: number;
+  leftHipVisibility: number;
+  rightHipVisibility: number;
+  depthAssistedRom: number | null;
   rawShoulderYawDeg: number | null;
   rawPelvisYawDeg: number | null;
   smoothedShoulderYawDeg: number | null;

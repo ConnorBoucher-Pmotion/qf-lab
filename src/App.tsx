@@ -173,6 +173,9 @@ export function App() {
             <div className="instruction-bar">
               <p className={`instruction tone-${instructionTone(snapshot?.state)}`}>{snapshot?.instruction ?? "Sit facing the camera."}</p>
               {snapshot?.canStart ? <ReadyPrompt snapshot={snapshot} mic={mic} /> : null}
+              {config.cameraGuideOffsetDeg > 0 ? (
+                <p className="mic-note">Dev camera guide: place the lens about {config.cameraGuideOffsetDeg}° off frontal (chest height). Protocol stays seated and frontal by default at 0°.</p>
+              ) : null}
               {snapshot?.blockedBy ? <p className="blocked-by">{snapshot.blockedBy}</p> : null}
               <div className="start-row">
                 <button type="button" disabled={(snapshot?.state !== "READY" && snapshot?.state !== "READY_CONFIRMING") || config.romTestMode} onClick={() => setStartSignal((value) => value + 1)}>

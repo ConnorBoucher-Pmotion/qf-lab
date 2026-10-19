@@ -34,12 +34,13 @@ export function ResultsPanel({ live, latest, videoIds, savingId, onGoniometer, o
         <>
           <p className="kicker">{live.direction === "left" ? "Left rotation" : "Right rotation"}</p>
           <p>
-            <b>Valid ROM {fmt(live.measuredRom)}</b>
+            <b>ROM {fmt(live.measuredRom)}</b>
           </p>
           <p className="muted small">
-            Raw peak {fmt(live.rawMaximum)} · {ALGORITHM_INFO[live.algorithm].label} · confidence {live.confidence}% · hold {live.holdMs == null ? "—" : `${(live.holdMs / 1000).toFixed(1)} s`}
+            Trial quality: {live.trialQuality ?? "—"} · tracking {live.confidence}% · raw peak {fmt(live.rawMaximum)} · {ALGORITHM_INFO[live.algorithm].label}
           </p>
-          <p className="muted small">Software tracking confidence, not a clinical score. {live.accepted ? "Hold confirmed." : live.instruction}</p>
+          {live.qualityNote ? <p className="muted small">{live.qualityNote}</p> : null}
+          <p className="muted small">Software tracking confidence, not a clinical score. {live.accepted ? "Capture complete." : live.instruction}</p>
           <ul className="checklist">
             {ROWS.map((row) => {
               const value = live.atValid?.[row.value] ?? null;

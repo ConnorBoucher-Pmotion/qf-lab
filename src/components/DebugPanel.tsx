@@ -68,12 +68,24 @@ export function DebugPanel({ open, config, snapshot, recorder, preRollMs, postRo
               <Item label="Algorithm" value={snapshot ? ALGORITHM_INFO[snapshot.algorithm].label : "—"} />
               <Item label="Frame rate" value={snapshot ? String(snapshot.fps) : "—"} />
               <Item label="Record" value={recorder ? `${recorder.phase} · pose ${recorder.poseFps} · video ${recorder.recordFps}` : "—"} />
-              <Item label="Raw rotation" value={deg(snapshot?.rom.raw)} />
+              <Item label="RAW ROM" value={deg(snapshot?.rom.raw)} />
+              <Item label="SMOOTHED ROM" value={deg(snapshot?.rom.filtered)} />
+              <Item label="ACCEPTED ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : snapshot?.rom.filtered)} />
+              <Item label="MAX ACCEPTED ROM" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
               <Item label="Landmark-smoothed rotation" value={deg(snapshot?.rom.landmarkSmoothed)} />
-              <Item label="Filtered rotation" value={deg(snapshot?.rom.filtered)} />
               <Item label="Raw peak" value={deg(snapshot?.movementStarted ? snapshot.rom.rawPeak : null)} />
               <Item label="Filtered peak" value={deg(snapshot?.movementStarted ? snapshot.rom.filteredPeak : null)} />
-              <Item label="Valid peak" value={deg(snapshot?.movementStarted ? snapshot.rom.validPeak : null)} />
+              <Item label="MOVEMENT VALIDITY" value={snapshot?.movementStarted ? (snapshot.movementValid ? "PASS" : "FAIL") : "—"} />
+              <Item label="TRACKING CONFIDENCE" value={snapshot ? `${snapshot.trackingBand.toUpperCase()} (${snapshot.trackingScore}%)` : "—"} />
+              <Item label="Occlusion state" value={snapshot?.occlusionLabel ?? "—"} />
+              <Item label="Rejected" value={snapshot?.rejectReason || "—"} />
+              <Item label="Left shoulder visibility" value={num(snapshot?.leftShoulderVisibility)} />
+              <Item label="Right shoulder visibility" value={num(snapshot?.rightShoulderVisibility)} />
+              <Item label="Left hip visibility" value={num(snapshot?.leftHipVisibility)} />
+              <Item label="Right hip visibility" value={num(snapshot?.rightHipVisibility)} />
+              <Item label="World-axis ROM (C)" value={deg(metrics?.algorithms.torsoPelvis)} />
+              <Item label="Depth-assisted ROM (D)" value={deg(snapshot?.depthAssistedRom)} />
+              <Item label="Camera offset guide" value={snapshot ? `${config.cameraGuideOffsetDeg}°` : "—"} />
               <Item label="Raw shoulder yaw" value={deg(snapshot?.rawShoulderYawDeg)} />
               <Item label="Smoothed shoulder yaw" value={deg(snapshot?.smoothedShoulderYawDeg)} />
               <Item label="Raw pelvis yaw" value={deg(snapshot?.rawPelvisYawDeg)} />
