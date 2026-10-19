@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SideRomPanel } from "./components/SideRomPanel";
 import { CameraView } from "./components/CameraView";
 import { DebugPanel } from "./components/DebugPanel";
 import { PositioningGuide, instructionTone } from "./components/PositioningGuide";
@@ -6,52 +7,56 @@ import { QualityIndicator } from "./components/QualityIndicator";
 import { RepeatabilityPanel } from "./components/RepeatabilityPanel";
 import { ResultsPanel } from "./components/ResultsPanel";
 import { TrialVideoDialog } from "./components/TrialVideoDialog";
-import type { QFConfig } from "./qf/qfConfig";
-import type { Side } from "./pose/types";
-import type { QFResult, QFSnapshot, Trial, TrialRecording } from "./qf/qfTypes";
 import type { RecorderStatus, SavedRecording } from "./recording/trialRecorder";
-import { clearRecordings, deleteRecording, listRecordingIds, putRecording } from "./recording/recordingStore";
+import { deleteRecording, listRecordingIds, putRecording } from "./recording/recordingStore";
 import { loadConfig, loadSeries, loadTrials, saveConfig, saveSeries, saveTrials, withGoniometer } from "./storage/trials";
+import { speak, useReadyVoice } from "./audio/cues";
+import type { SRConfig } from "./sr/srConfig";
+import type { SRResult, SRSnapshot, SRTrial, TrialRecording } from "./sr/srTypes";
 
 export function App() {
-  const [side, setSide] = useState<Side>("right");
-  const [config, setConfigState] = useState<QFConfig>(() => loadConfig());
-  const [series, setSeriesState] = useState<string>(() => loadSeries());
+  const [config, setConfigState] = useState<SRConfig>(() => loadConfig());
+  const [series, setSeriesState] = useState(() => loadSeries());
   const [resetSignal, setResetSignal] = useState(0);
   const [nextSignal, setNextSignal] = useState(0);
-  const [snapshot, setSnapshot] = useState<QFSnapshot | null>(null);
+  const [startSignal, setStartSignal] = useState(0);
+  const [voiceSignal, setVoiceSignal] = useState(0);
+  const [acceptSignal, setAcceptSignal] = useState(0);
+  const [snapshot, setSnapshot] = useState<SRSnapshot | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
-  const [trials, setTrials] = useState<Trial[]>(() => loadTrials());
+  const [trials, setTrials] = useState<SRTrial[]>(() => loadTrials());
   const [videoIds, setVideoIds] = useState<ReadonlySet<string>>(new Set());
   const [recorder, setRecorder] = useState<RecorderStatus | null>(null);
   const [preRollMs, setPreRollMs] = useState(1500);
   const [postRollMs, setPostRollMs] = useState(1000);
   const [reviewId, setReviewId] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(() => nextAttempt(loadTrials(), loadSeries()));
   const pendingRecording = useRef(new Map<string, TrialRecording>());
 
-  const setConfig = (next: QFConfig) => {
+  const setConfig = (next: SRConfig) => {
     setConfigState(next);
     saveConfig(next);
   };
   const setSeries = (next: string) => {
     setSeriesState(next);
     saveSeries(next);
+    setAttempt(nextAttempt(trials, next));
   };
-  const commit = (update: (current: Trial[]) => Trial[]) =>
+  const commit = (update: (current: SRTrial[]) => SRTrial[]) =>
     setTrials((current) => {
       const next = update(current);
       if (next !== current) saveTrials(next);
       return next;
     });
 
-  const toTrial = (result: QFResult, current: Trial[]): Trial => ({
+  const toTrial = (result: SRResult, current: SRTrial[]): SRTrial => ({
     ...result,
-    series,
-    trialNumber: current.filter((t) => t.series === series && t.side === result.side).reduce((max, t) => Math.max(max, t.trialNumber), 0) + 1,
+    series: seriesRef.current,
+    trialNumber: current.filter((trial) => trial.series === seriesRef.current).reduce((max, trial) => Math.max(max, trial.trialNumber), 0) + 1,
+    preRollMs: preRollRef.current,
     goniometer: null,
     absoluteError: null,
     signedError: null,
-    percentError: null,
     recording: pendingRecording.current.get(result.id) ?? null,
   });
 
@@ -61,8 +66,8 @@ export function App() {
 
   useEffect(() => {
     const result = snapshot?.result;
-    if (!result || (snapshot?.state !== "RESULT" && snapshot?.state !== "INVALID")) return;
-    commit((current) => (current.some((t) => t.id === result.id) ? current : [toTrial(result, current), ...current]));
+    if (!result || (snapshot?.state !== "COMPLETE" && snapshot?.state !== "INVALID")) return;
+    commit((current) => (current.some((trial) => trial.id === result.id) ? current : [toTrial(result, current), ...current]));
   }, [snapshot?.result?.id, snapshot?.state]);
 
   const forgetVideos = (ids: string[]) => {
@@ -82,59 +87,98 @@ export function App() {
     pendingRecording.current.set(saved.trialId, meta);
     void putRecording(saved.trialId, { blob: saved.blob, ...meta }).then(() => {
       setVideoIds((current) => new Set(current).add(saved.trialId));
-      commit((current) => (current.some((trial) => trial.id === saved.trialId) ? current.map((trial) => (trial.id === saved.trialId ? { ...trial, recording: meta } : trial)) : current));
+      commit((current) => current.map((trial) => (trial.id === saved.trialId ? { ...trial, recording: meta } : trial)));
     });
   };
 
-  const live = snapshot && (snapshot.state === "RESULT" || snapshot.state === "INVALID") ? snapshot.result : null;
-  const latest = useMemo(() => (live ? trials.find((t) => t.id === live.id) ?? null : null), [trials, live]);
-  const rejectionSaved = live != null && !live.accepted && trials.some((t) => t.id === live.id);
+  const live = snapshot && (snapshot.state === "COMPLETE" || snapshot.state === "INVALID") ? snapshot.result : null;
+  const latest = useMemo(() => (live ? (trials.find((trial) => trial.id === live.id) ?? null) : null), [trials, live]);
   const savingId = recorder && (recorder.phase === "post" || recorder.phase === "keep") ? recorder.trialId : null;
-  const review = reviewId ? trials.find((trial) => trial.id === reviewId) ?? null : null;
+  const review = reviewId ? (trials.find((trial) => trial.id === reviewId) ?? null) : null;
+  const seriesRef = useRef(series);
+  const preRollRef = useRef(preRollMs);
+  const heardState = useRef<string | null>(null);
+  seriesRef.current = series;
+  preRollRef.current = preRollMs;
+
+  const canListen = (snapshot?.state === "READY" || snapshot?.state === "READY_CONFIRMING") && snapshot.canStart && !config.romTestMode;
+  const mic = useReadyVoice(canListen, () => setVoiceSignal((value) => value + 1));
+
+  useEffect(() => {
+    const state = snapshot?.state ?? null;
+    if (!state || state === heardState.current) return;
+    const previous = heardState.current;
+    heardState.current = state;
+    if (state === "COUNTDOWN" && (previous === "READY" || previous === "READY_CONFIRMING")) playTone(660, 140);
+    if (state === "ACTIVE" && (previous === "COUNTDOWN" || previous === "READY" || previous === "READY_CONFIRMING")) {
+      playTone(880, 160);
+      speak("Rotate");
+    }
+    if (state === "COMPLETE" && snapshot?.result?.accepted) speak("Assessment Completed");
+  }, [snapshot?.state, snapshot?.result]);
 
   return (
     <div className="page">
       <section className="assessment">
         <header>
           <div className="brand">
-            <h1>QF assessment</h1>
-            <p className={`pill sev-${toneClass(snapshot)}`}>{snapshot ? snapshot.state.replace("_", " ") : "SEARCHING"}</p>
+            <h1>Shoulder Rotation</h1>
+            <p className={`pill sev-${tone(snapshot)}`}>{snapshot ? snapshot.state.replaceAll("_", " ") : "SEARCHING"}</p>
           </div>
           <div className="row nowrap">
-            <div className="segmented">
-              <button type="button" className={side === "left" ? "on" : ""} onClick={() => setSide("left")}>
-                Left leg
-              </button>
-              <button type="button" className={side === "right" ? "on" : ""} onClick={() => setSide("right")}>
-                Right leg
-              </button>
-            </div>
-            <button type="button" onClick={() => setNextSignal((v) => v + 1)} disabled={!snapshot?.baseline}>
+            <button
+              type="button"
+              onClick={() => {
+                setNextSignal((value) => value + 1);
+                setAttempt(nextAttempt(trials, series));
+              }}
+              disabled={!snapshot?.baselineReady && snapshot?.state !== "COMPLETE" && snapshot?.state !== "INVALID"}
+            >
               Next trial
             </button>
-            <button type="button" onClick={() => setResetSignal((v) => v + 1)}>
-              Recalibrate
+            <button type="button" onClick={() => setResetSignal((value) => value + 1)}>
+              Reset current trial
             </button>
+            <p className="trial-count">Trial {attempt}</p>
           </div>
         </header>
         <div className="assessment-grid">
           <div className="camera-column">
-            <CameraView
-              side={side}
-              config={config}
-              resetSignal={resetSignal}
-              nextSignal={nextSignal}
-              preRollMs={preRollMs}
-              postRollMs={postRollMs}
-              onSnapshot={setSnapshot}
-              onRecording={onRecording}
-              onRecorderStatus={setRecorder}
-            />
+            <div className="camera-stage">
+              <CameraView
+                config={config}
+                resetSignal={resetSignal}
+                nextSignal={nextSignal}
+                startSignal={startSignal}
+                voiceSignal={voiceSignal}
+                acceptSignal={acceptSignal}
+                preRollMs={preRollMs}
+                postRollMs={postRollMs}
+                onSnapshot={setSnapshot}
+                onRecording={onRecording}
+                onRecorderStatus={setRecorder}
+              />
+              {snapshot?.countdownLabel ? <p className={`countdown${snapshot.countdownLabel.length > 3 ? " countdown-word" : ""}`}>{snapshot.countdownLabel}</p> : null}
+            </div>
             <div className="instruction-bar">
-              <p className={`instruction tone-${instructionTone(snapshot?.state)}`}>{snapshot?.instruction ?? "Sit facing the camera."}</p>
+              <p className={`instruction tone-${instructionTone(snapshot?.state)}`}>{snapshot?.instruction ?? "Sit facing the camera in a goalpost position."}</p>
+              {snapshot?.canStart ? <ReadyPrompt snapshot={snapshot} mic={mic} /> : null}
+              {snapshot?.blockedBy ? <p className="blocked-by">{snapshot.blockedBy}</p> : null}
+              <div className="start-row">
+                <button type="button" disabled={(snapshot?.state !== "READY" && snapshot?.state !== "READY_CONFIRMING") || config.romTestMode} onClick={() => setStartSignal((value) => value + 1)}>
+                  I'm Ready
+                </button>
+                <button type="button" disabled={!snapshot?.movementStarted || snapshot.result != null} onClick={() => setAcceptSignal((value) => value + 1)}>
+                  End capture
+                </button>
+                <button type="button" className={config.romTestMode ? "on" : ""} onClick={() => setConfig({ ...config, romTestMode: !config.romTestMode })}>
+                  ROM algorithm test mode
+                </button>
+              </div>
             </div>
           </div>
           <aside className="live-rail">
+            <SideRomPanel snapshot={snapshot} />
             <QualityIndicator snapshot={snapshot} />
             <PositioningGuide snapshot={snapshot} />
           </aside>
@@ -147,39 +191,26 @@ export function App() {
             latest={latest}
             videoIds={videoIds}
             savingId={savingId}
-            rejectionSaved={rejectionSaved}
-            onNext={() => setNextSignal((v) => v + 1)}
+            onNext={() => setNextSignal((value) => value + 1)}
             onReview={setReviewId}
-            onGoniometer={(id, value) => commit((current) => current.map((t) => (t.id === id ? withGoniometer(t, value) : t)))}
-            onSaveRejection={() => {
-              if (!live || live.accepted) return;
-              commit((current) => (current.some((t) => t.id === live.id) ? current : [toTrial(live, current), ...current]));
-            }}
+            onGoniometer={(id, value) => commit((current) => current.map((trial) => (trial.id === id ? withGoniometer(trial, value) : trial)))}
           />
           <RepeatabilityPanel
             trials={trials}
-            side={side}
             series={series}
             videoIds={videoIds}
             savingId={savingId}
             onSeries={setSeries}
             onReview={setReviewId}
-            onGoniometer={(id, value) => commit((current) => current.map((t) => (t.id === id ? withGoniometer(t, value) : t)))}
+            onGoniometer={(id, value) => commit((current) => current.map((trial) => (trial.id === id ? withGoniometer(trial, value) : trial)))}
             onDelete={(id) => {
               forgetVideos([id]);
-              commit((current) => current.filter((t) => t.id !== id));
+              commit((current) => current.filter((trial) => trial.id !== id));
             }}
             onClearSeries={() => {
-              const ids = trials.filter((t) => t.series === series && t.side === side).map((t) => t.id);
+              const ids = trials.filter((trial) => trial.series === series).map((trial) => trial.id);
               forgetVideos(ids);
-              commit((current) => current.filter((t) => !(t.series === series && t.side === side)));
-            }}
-            onClearRecordings={() => {
-              void clearRecordings().then(() => {
-                pendingRecording.current.clear();
-                setVideoIds(new Set());
-                commit((current) => current.map((trial) => (trial.recording ? { ...trial, recording: null } : trial)));
-              });
+              commit((current) => current.filter((trial) => trial.series !== series));
             }}
           />
         </div>
@@ -196,21 +227,54 @@ export function App() {
           onChange={setConfig}
         />
       </section>
-      <TrialVideoDialog
-        trial={review}
-        onClose={() => setReviewId(null)}
-        onDeleted={(id) => {
-          forgetVideos([id]);
-          commit((current) => current.map((trial) => (trial.id === id ? { ...trial, recording: null } : trial)));
-          setReviewId(null);
-        }}
-      />
+      <TrialVideoDialog trial={review} preRollMs={preRollMs} onClose={() => setReviewId(null)} onDeleted={forgetVideos.bind(null, review ? [review.id] : [])} />
     </div>
   );
 }
 
-function toneClass(snapshot: QFSnapshot | null): string {
-  if (!snapshot || snapshot.state === "INVALID" || snapshot.state === "SEARCHING" || snapshot.hardFailed) return "red";
-  if (snapshot.state === "POSITIONING" || snapshot.state === "CALIBRATING" || snapshot.state === "TRACKING_WARNING") return "yellow";
+function nextAttempt(saved: SRTrial[], seriesName: string): number {
+  return saved.filter((trial) => trial.series === seriesName).reduce((max, trial) => Math.max(max, trial.trialNumber), 0) + 1;
+}
+
+function ReadyPrompt({ snapshot, mic }: { snapshot: SRSnapshot; mic: "unknown" | "granted" | "needs-mic" | "unavailable" }) {
+  const held = (snapshot.thumbProgress * 2).toFixed(1);
+  const percent = Math.round(snapshot.thumbProgress * 100);
+  return (
+    <div className="ready-card">
+      <p className="ready-title">Position looks good</p>
+      <p>{snapshot.thumbSeen ? "Thumbs Up Detected" : "Hold thumbs up when ready"}</p>
+      <div className="thumb-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label="Thumbs-up hold">
+        <span style={{ width: `${percent}%` }} />
+      </div>
+      <p className="thumb-percent">
+        {held} / 2.0 seconds
+      </p>
+      <p>or say "Ready"</p>
+      {mic === "needs-mic" ? <p className="mic-note">Enable microphone to use voice start</p> : null}
+      {mic === "unavailable" ? <p className="mic-note">Voice start is not available in this browser. Use the thumbs up or I'm Ready.</p> : null}
+    </div>
+  );
+}
+
+function tone(snapshot: SRSnapshot | null): string {
+  if (!snapshot || snapshot.state === "SEARCHING" || snapshot.state === "INVALID" || snapshot.state === "TRACKING_LOST") return "red";
+  if (snapshot.state === "POSITIONING" || snapshot.state === "CALIBRATING" || snapshot.state === "COUNTDOWN" || snapshot.state === "PEAK" || snapshot.state === "ACTIVE" || snapshot.hardFailed) return "yellow";
   return "green";
+}
+
+function playTone(frequency: number, ms: number): void {
+  const audio = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!audio) return;
+  const context = new audio();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.frequency.value = frequency;
+  oscillator.type = "sine";
+  gain.gain.value = 0.04;
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start();
+  gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + ms / 1000);
+  oscillator.stop(context.currentTime + ms / 1000);
+  window.setTimeout(() => void context.close(), ms + 80);
 }

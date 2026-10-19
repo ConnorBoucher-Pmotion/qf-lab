@@ -5,7 +5,7 @@ export type StoredRecording = {
   bytes: number;
 };
 
-const DB_NAME = "qf-lab";
+const DB_NAME = "sr-lab";
 const STORE = "recordings";
 
 const memory = new Map<string, StoredRecording>();
@@ -114,9 +114,9 @@ export function recordingFilename(trial: { side: string; trialNumber: number; ti
   const date = new Date(trial.timestamp);
   const pad = (value: number) => String(value).padStart(2, "0");
   const stamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
-  const side = trial.side === "left" ? "Left" : "Right";
+  const side = trial.side === "left" ? "Left" : trial.side === "right" ? "Right" : "Bilateral";
   const ext = mimeType.includes("mp4") ? "mp4" : "webm";
-  return `QF_${side}_Trial_${pad(trial.trialNumber)}_${stamp}.${ext}`;
+  return `SR_${side}_Trial_${pad(trial.trialNumber)}_${stamp}.${ext}`;
 }
 
 export function videoAction(id: string, videoIds: ReadonlySet<string>, savingId: string | null): { label: string; enabled: boolean } {

@@ -1,14 +1,13 @@
-import type { ConstraintCheck, QFSnapshot } from "../qf/qfTypes";
+import type { ConstraintCheck, SRSnapshot } from "../sr/srTypes";
 
-const EMPTY: ConstraintCheck[] = [];
-
-export function PositioningGuide({ snapshot }: { snapshot: QFSnapshot | null }) {
+export function PositioningGuide({ snapshot }: { snapshot: SRSnapshot | null }) {
   const state = snapshot?.state ?? "SEARCHING";
-  const setup = state === "SEARCHING" || state === "POSITIONING" || state === "CALIBRATING";
-  const checks = setup ? (snapshot?.setupChecks ?? EMPTY) : (snapshot?.checks.filter((c) => c.category === "hard" || c.category === "soft") ?? EMPTY);
+  const movement = state === "ACTIVE" || state === "MEASURING" || state === "PEAK" || state === "HOLD" || state === "TRACKING_LOST" || state === "COMPLETE";
+  const checks = movement ? (snapshot?.checks ?? []) : (snapshot?.setupChecks ?? []);
   return (
     <section className="gate-box">
-      <p className="kicker">{setup ? "Start gates" : "Movement gates"}</p>
+      <p className="kicker">{movement ? "During rotation" : "Starting position"}</p>
+      {movement && snapshot?.movementMessage ? <p className={`movement-note${snapshot.movementMessage === "Movement valid" ? " ok" : ""}`}>{snapshot.movementMessage}</p> : null}
       <ul className="checklist">
         {checks.length === 0 ? (
           <li className="st-na">
@@ -17,29 +16,66 @@ export function PositioningGuide({ snapshot }: { snapshot: QFSnapshot | null }) 
           </li>
         ) : (
           checks.map((check) => (
-            <li key={check.id} className={`st-${check.status}`}>
-              <span className="mark">{mark(check.status)}</span>
+            <li key={check.id} className={`st-${check.status === "na" ? "na" : check.status}`}>
+              <span className="mark">{mark(check)}</span>
               <span>
                 {check.label}
-                {check.status === "fail" || check.status === "warn" ? <small>{check.message}</small> : null}
+                <small>{check.message}</small>
               </span>
             </li>
           ))
         )}
       </ul>
+      {movement ? null : <FacingReadout snapshot={snapshot} />}
     </section>
   );
 }
 
-function mark(status: ConstraintCheck["status"]): string {
-  if (status === "pass") return "PASS";
-  if (status === "warn") return "WARN";
-  if (status === "na") return "N/A";
+function FacingReadout({ snapshot }: { snapshot: SRSnapshot | null }) {
+  const facing = snapshot?.cameraFacing;
+  const meters = (value: number | null | undefined) => (value == null ? "—" : value.toFixed(3));
+  const deg = (value: number | null | undefined) => (value == null ? "—" : `${value.toFixed(1)}°`);
+  const status = facing?.status === "pass" ? "PASS" : facing?.status === "warn" ? "WARNING" : facing?.status === "fail" ? "FAIL" : "—";
+  return (
+    <dl className="readout facing-readout">
+      <Item label="Face camera status" value={status} />
+      <Item label="Facing score" value={deg(facing?.scoreDeg)} />
+      <Item label="Pass below" value={facing ? `${facing.warnDeg}°` : "—"} />
+      <Item label="Fail at" value={facing ? `${facing.failDeg}°` : "—"} />
+      <Item label="Left shoulder Z" value={meters(facing?.leftShoulderZ)} />
+      <Item label="Right shoulder Z" value={meters(facing?.rightShoulderZ)} />
+      <Item label="Shoulder Z difference" value={meters(facing?.shoulderZDiff)} />
+      <Item label="Left hip Z" value={meters(facing?.leftHipZ)} />
+      <Item label="Right hip Z" value={meters(facing?.rightHipZ)} />
+      <Item label="Hip Z difference" value={meters(facing?.hipZDiff)} />
+      <Item label="Shoulder width" value={meters(facing?.shoulderWidth)} />
+      <Item label="Hip width" value={meters(facing?.hipWidth)} />
+      <Item label="Shoulder axis" value={deg(facing?.shoulderYawDeg)} />
+      <Item label="Hip axis" value={deg(facing?.hipYawDeg)} />
+      <p className="facing-reason">{facing?.reason ?? "Waiting for a pose."}</p>
+    </dl>
+  );
+}
+
+function Item({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
+
+function mark(check: ConstraintCheck): string {
+  if (check.category === "info") return "INFO";
+  if (check.status === "pass") return "PASS";
+  if (check.status === "warn") return "WARN";
+  if (check.status === "na") return "N/A";
   return "FAIL";
 }
 
-export function instructionTone(state: QFSnapshot["state"] | undefined): string {
-  if (state === "INVALID" || state === "SEARCHING" || state == null) return "bad";
-  if (state === "POSITIONING" || state === "CALIBRATING" || state === "TRACKING_WARNING" || state === "VALIDATING") return "warn";
+export function instructionTone(state: SRSnapshot["state"] | undefined): string {
+  if (state === "INVALID" || state === "SEARCHING" || state === "TRACKING_LOST" || state == null) return "bad";
+  if (state === "POSITIONING" || state === "STABLE" || state === "CALIBRATING" || state === "COUNTDOWN" || state === "PEAK" || state === "ACTIVE" || state === "READY_CONFIRMING") return "warn";
   return "ok";
 }
