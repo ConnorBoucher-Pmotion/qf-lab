@@ -1,13 +1,27 @@
 anatomical-body.glb
---------------------
-Source: male_base.glb from the PMotion vision-assessment repo
-  (originally used for synthetic ROM lab; low-poly base mesh).
-Upstream reference in syntheticHuman3d.ts:
-  https://raw.githubusercontent.com/BoQsc/Godot-3D-Male-Base-Mesh/main/Original/male_base_mesh.glb
+===================
 
-This file is an OPTIONAL drop-in path for a future production anatomical GLB.
-Phase 1 Movement Profile renders a PMotion procedural anatomical mannequin by default
-(see src/model/modelManifest.ts) so the product is not dependent on Zygote or other
-proprietary anatomy libraries.
+File: fullbody_atlas_light.glb (copied as anatomical-body.glb)
 
-Zygote Body is a visual design reference only — do not bundle Zygote assets.
+Source:
+  Hugging Face dataset — myohub/myosuite-assets
+  Path: muscles/fullbody_atlas_light.glb
+  https://huggingface.co/datasets/myohub/myosuite-assets
+
+Geometry origin:
+  BodyParts3D © The Database Center for Life Science (DBCLS)
+  Mitsuhashi N, et al. BodyParts3D: 3D structure database for anatomical concepts.
+  Nucleic Acids Res. 2009;37:D782-5. doi:10.1093/nar/gkn613
+
+License:
+  Creative Commons Attribution 4.0 International (CC BY 4.0)
+  https://creativecommons.org/licenses/by/4.0/
+
+Obtained through human-atlas (MIT) / MyoSuite packaging.
+Changes in this project: used as a static visualization asset for PMotion Movement Profile;
+materials and region highlighting applied at runtime; not modified in the GLB binary.
+
+Attribution (required by CC BY 4.0):
+  "Muscle geometry from BodyParts3D (DBCLS), CC BY 4.0, via MyoSuite / human-atlas."
+
+This is NOT a Zygote Body asset. Zygote Body is a design reference only.
