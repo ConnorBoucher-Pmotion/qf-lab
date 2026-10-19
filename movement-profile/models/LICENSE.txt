@@ -22,6 +22,10 @@ Changes in this project: used as a static visualization asset for PMotion Moveme
 materials and region highlighting applied at runtime; not modified in the GLB binary.
 
 Attribution (required by CC BY 4.0):
-  "Muscle geometry from BodyParts3D (DBCLS), CC BY 4.0, via MyoSuite / human-atlas."
+  "Geometry: BodyParts3D (DBCLS), CC BY 4.0, via MyoSuite — presented as a holographic digital scan."
+
+Presentation:
+  Runtime holographic materials (translucent cyan MeshPhysicalMaterial + fresnel rim + bloom).
+  Not a stock hologram illustration; original geometry restyled for PMotion.
 
 This is NOT a Zygote Body asset. Zygote Body is a design reference only.
