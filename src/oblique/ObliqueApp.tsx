@@ -20,8 +20,9 @@ export function ObliqueApp({ onBack }: Props) {
   const [snapshot, setSnapshot] = useState<ObliqueSnapshot | null>(null);
   const [debugOpen, setDebugOpen] = useState(true);
   const heardState = useRef<string | null>(null);
+  const readyPrompted = useRef(false);
 
-  const canListen = (snapshot?.state === "READY" || snapshot?.state === "READY_CONFIRMING") && snapshot.canStart;
+  const canListen = (snapshot?.state === "WAITING_FOR_READY" || snapshot?.state === "READY_CONFIRMING") && snapshot.canStart;
   const mic = useReadyVoice(canListen, () => setVoiceSignal((value) => value + 1));
 
   useEffect(() => {
@@ -29,13 +30,35 @@ export function ObliqueApp({ onBack }: Props) {
     if (!state || state === heardState.current) return;
     const previous = heardState.current;
     heardState.current = state;
-    if (state === "COUNTDOWN" && (previous === "READY" || previous === "READY_CONFIRMING")) playTone(660, 140);
-    if (state === "ACTIVE" && (previous === "COUNTDOWN" || previous === "READY" || previous === "READY_CONFIRMING")) {
+
+    if (state === "WAITING_FOR_READY" && !readyPrompted.current) {
+      readyPrompted.current = true;
+      speak("Say ready when in position.");
+    }
+    if (state === "ALIGNMENT" || state === "CALIBRATING" || state === "SEARCHING") {
+      readyPrompted.current = false;
+    }
+    if (state === "COUNTDOWN" && (previous === "WAITING_FOR_READY" || previous === "READY_CONFIRMING")) {
+      playTone(660, 140);
+    }
+    if (state === "MEASURING" && (previous === "COUNTDOWN" || previous === "WAITING_FOR_READY" || previous === "READY_CONFIRMING")) {
       playTone(880, 160);
       speak("Rotate as far as you comfortably can.");
     }
-    if (state === "COMPLETE" && snapshot?.result?.accepted) speak("Assessment Completed");
-  }, [snapshot?.state, snapshot?.result]);
+    if (state === "TRIAL_COMPLETE") {
+      speak("Trial complete.");
+    }
+    if (state === "SESSION_COMPLETE") {
+      speak("Assessment Completed.");
+    }
+  }, [snapshot?.state]);
+
+  useEffect(() => {
+    // Keep React direction toggle in sync when session auto-advances.
+    if (snapshot?.direction && snapshot.direction !== direction && snapshot.state !== "MEASURING" && snapshot.state !== "COUNTDOWN") {
+      setDirection(snapshot.direction);
+    }
+  }, [snapshot?.direction, snapshot?.state, direction]);
 
   const setMode = (mode: ObliqueCameraMode) => setConfig((current) => ({ ...current, cameraMode: mode }));
 
@@ -62,8 +85,12 @@ export function ObliqueApp({ onBack }: Props) {
             <button type="button" onClick={() => setNextSignal((n) => n + 1)}>
               Next trial
             </button>
-            <button type="button" onClick={() => setSwitchSignal((n) => n + 1)}>
-              Switch side
+            <button
+              type="button"
+              disabled={snapshot?.state !== "TRIAL_COMPLETE"}
+              onClick={() => setSwitchSignal((n) => n + 1)}
+            >
+              Next direction
             </button>
             <button type="button" onClick={() => setResetSignal((n) => n + 1)}>
               Reset
@@ -86,16 +113,29 @@ export function ObliqueApp({ onBack }: Props) {
               {snapshot?.countdownLabel ? (
                 <p className={`countdown${snapshot.countdownLabel.length > 3 ? " countdown-word" : ""}`}>{snapshot.countdownLabel}</p>
               ) : null}
+              {snapshot?.state === "MEASURING" && snapshot.captureProgress != null ? (
+                <div className="measure-progress" aria-label="Measurement progress">
+                  <div className="measure-progress-fill" style={{ width: `${Math.round(snapshot.captureProgress * 100)}%` }} />
+                  <span className="measure-progress-label">
+                    {(snapshot.captureRemainingMs ?? 0) / 1000 > 0
+                      ? `${((snapshot.captureRemainingMs ?? 0) / 1000).toFixed(1)}s`
+                      : "0.0s"}
+                  </span>
+                </div>
+              ) : null}
+              <LiveDebugHud snapshot={snapshot} />
             </div>
             <div className="instruction-bar">
-              <p className="instruction">{snapshot?.instruction ?? "Sit upright. Camera ~45° to your body."}</p>
+              <p className={`instruction${snapshot?.state === "WAITING_FOR_READY" ? " instruction-ready" : ""}`}>
+                {snapshot?.instruction ?? "Sit upright. Camera ~45° to your body."}
+              </p>
               <p className="mic-note">{snapshot?.setupMessage}</p>
               <p className="mic-note">
                 Mic: {mic} · {cameraModeLabel(config.cameraMode)} ·{" "}
-                {snapshot?.movementStarted
-                  ? `${Math.round((snapshot.captureRemainingMs ?? 0) / 100) / 10}s left in capture window`
+                {snapshot?.state === "MEASURING"
+                  ? `Measuring · ${((snapshot.captureRemainingMs ?? 0) / 1000).toFixed(1)}s left`
                   : snapshot?.baselineReady
-                    ? "Baseline ready — say Ready or hold a thumbs up"
+                    ? "Aligned — say Ready or hold a thumbs up"
                     : `Calibrating neutral 0° · ${Math.round((snapshot?.calibrationProgress ?? 0) * 100)}%`}
               </p>
               {snapshot?.frame.rejectReason === "Pelvis unstable" ? <p className="blocked-by">Keep your hips facing forward.</p> : null}
@@ -115,48 +155,58 @@ export function ObliqueApp({ onBack }: Props) {
             </div>
           </div>
           <aside className="live-rail">
-            <section className="gate-box">
-              <h2>Live ROM</h2>
+            <section className="gate-box result-card">
+              <h2>RAW MAX ROM</h2>
+              <p className="result-hero">{deg(snapshot?.maxRawRom ?? snapshot?.result?.rawMaximum)}</p>
+              <p className="mic-note">
+                {snapshot?.direction === "left" ? "LEFT" : "RIGHT"} ROTATION
+                {snapshot?.state === "TRIAL_COMPLETE" || snapshot?.state === "SESSION_COMPLETE" ? " · TRIAL COMPLETE" : ""}
+              </p>
               <dl className="readout">
                 <div>
-                  <dt>Raw</dt>
+                  <dt>Current Raw</dt>
                   <dd>{deg(snapshot?.rawRom)}</dd>
+                </div>
+                <div>
+                  <dt>Raw Max</dt>
+                  <dd>{deg(snapshot?.maxRawRom)}</dd>
                 </div>
                 <div>
                   <dt>Filtered</dt>
                   <dd>{deg(snapshot?.filteredRom)}</dd>
                 </div>
+              </dl>
+            </section>
+            <section className="gate-box">
+              <h2>Live angles</h2>
+              <dl className="readout">
                 <div>
-                  <dt>Max Raw</dt>
-                  <dd>{deg(snapshot?.maxRawRom)}</dd>
+                  <dt>Shoulder raw</dt>
+                  <dd>{deg(snapshot?.shoulderRawDeg)}</dd>
                 </div>
                 <div>
-                  <dt>Max Valid</dt>
-                  <dd>{deg(snapshot?.maxValidRom)}</dd>
+                  <dt>Pelvis</dt>
+                  <dd>{deg(snapshot?.pelvisRawDeg)}</dd>
                 </div>
                 <div>
-                  <dt>Confidence</dt>
-                  <dd>{snapshot ? `${snapshot.measurementConfidence}%` : "—"}</dd>
-                </div>
-                <div>
-                  <dt>Frame</dt>
-                  <dd>{snapshot?.frame.frameValid.toUpperCase() ?? "—"}</dd>
+                  <dt>Thoracic</dt>
+                  <dd>{deg(snapshot?.thoracicRawDeg)}</dd>
                 </div>
               </dl>
             </section>
             <section className="gate-box">
-              <h2>Session</h2>
+              <h2>{snapshot?.bothDirectionsComplete ? "TL JUNCTION COMPLETE" : "Session"}</h2>
               <dl className="readout">
                 <div>
-                  <dt>Left</dt>
-                  <dd>{deg(snapshot?.leftResult)}</dd>
-                </div>
-                <div>
-                  <dt>Right</dt>
+                  <dt>Right Raw Max</dt>
                   <dd>{deg(snapshot?.rightResult)}</dd>
                 </div>
                 <div>
-                  <dt>Difference</dt>
+                  <dt>Left Raw Max</dt>
+                  <dd>{deg(snapshot?.leftResult)}</dd>
+                </div>
+                <div>
+                  <dt>Asymmetry</dt>
                   <dd>{deg(snapshot?.asymmetryDeg)}</dd>
                 </div>
               </dl>
@@ -171,14 +221,46 @@ export function ObliqueApp({ onBack }: Props) {
   );
 }
 
+function LiveDebugHud({ snapshot }: { snapshot: ObliqueSnapshot | null }) {
+  if (!snapshot) return null;
+  const f = snapshot.frame;
+  const ls = f.leftShoulder;
+  const rs = f.rightShoulder;
+  return (
+    <div className="oblique-hud">
+      <div>STATE: {snapshot.state}</div>
+      <div>
+        LS: {ls ? `${ls.x.toFixed(2)} / ${ls.y.toFixed(2)} / ${ls.z.toFixed(2)} / ${f.leftShoulderConfidence.toFixed(2)}` : "—"}
+      </div>
+      <div>
+        RS: {rs ? `${rs.x.toFixed(2)} / ${rs.y.toFixed(2)} / ${rs.z.toFixed(2)} / ${f.rightShoulderConfidence.toFixed(2)}` : "—"}
+      </div>
+      <div>CURRENT SHOULDER ANGLE: {deg(f.liveShoulderYawDeg)}</div>
+      <div>NEUTRAL SHOULDER ANGLE: {deg(f.neutralShoulderYawDeg)}</div>
+      <div>RAW ROTATION FROM BASELINE: {deg(f.shoulderRotationDeg)}</div>
+      <div>PELVIS ROTATION: {deg(f.pelvisRotationDeg)}</div>
+      <div>THORACIC ROTATION: {deg(f.thoracicRotationDeg)}</div>
+      <div>CURRENT RAW TL ROM: {deg(snapshot.rawRom)}</div>
+      <div>RAW MAX ROM: {deg(snapshot.maxRawRom)}</div>
+      <div>
+        TIME REMAINING:{" "}
+        {snapshot.state === "MEASURING" && snapshot.captureRemainingMs != null
+          ? `${(snapshot.captureRemainingMs / 1000).toFixed(1)}s`
+          : "—"}
+      </div>
+      <div>BASELINE SEALED: {f.baselineSealed ? "YES" : "NO"}</div>
+    </div>
+  );
+}
+
 function deg(value: number | null | undefined): string {
   return value == null ? "—" : `${value.toFixed(1)}°`;
 }
 
 function pillTone(snapshot: ObliqueSnapshot | null): string {
   if (!snapshot) return "na";
-  if (snapshot.state === "COMPLETE") return "pass";
-  if (snapshot.state === "ACTIVE") return "warn";
+  if (snapshot.state === "TRIAL_COMPLETE" || snapshot.state === "SESSION_COMPLETE") return "pass";
+  if (snapshot.state === "MEASURING") return "warn";
   if (snapshot.frame.frameValid === "reject") return "fail";
   return "pass";
 }

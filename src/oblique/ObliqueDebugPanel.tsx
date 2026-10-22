@@ -15,16 +15,17 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
         Developer / debug {open ? "▴" : "▾"}
       </button>
       <div className="debug-body" hidden={!open}>
-        <p className="provisional">Experimental 45° oblique pipeline. World-landmark thoracic ROM vs calibrated neutral. Not clinically validated.</p>
+        <p className="provisional">Experimental 45° oblique pipeline. Primary result = RAW MAX shoulder XZ yaw vs sealed neutral. Thoracic kept for comparison. Not clinically validated.</p>
         <h3>ROM pipeline</h3>
         <dl className="readout">
           <Item label="Camera Mode" value={snapshot ? cameraModeLabel(snapshot.cameraMode) : "—"} />
           <Item label="State" value={snapshot?.state ?? "—"} />
           <Item label="Direction" value={snapshot ? snapshot.direction.toUpperCase() : "—"} />
-          <Item label="RAW ROM" value={deg(snapshot?.rawRom)} />
+          <Item label="CURRENT RAW ROM" value={deg(snapshot?.rawRom)} />
+          <Item label="RAW MAX ROM (result)" value={deg(snapshot?.maxRawRom)} />
           <Item label="FILTERED ROM" value={deg(snapshot?.filteredRom)} />
-          <Item label="MAX RAW ROM" value={deg(snapshot?.maxRawRom)} />
-          <Item label="MAX VALIDATED ROM" value={deg(snapshot?.maxValidRom)} />
+          <Item label="MAX VALIDATED (debug)" value={deg(snapshot?.maxValidRom)} />
+          <Item label="Baseline sealed" value={yesNo(f?.baselineSealed)} />
           <Item label="Frame valid" value={f?.frameValid.toUpperCase() ?? "—"} />
           <Item label="Reject reason" value={f?.rejectReason || "—"} />
           <Item label="Measurement confidence" value={snapshot ? `${snapshot.measurementConfidence}%` : "—"} />
@@ -48,9 +49,11 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
           <Item label="Current shoulder vector" value={v3(f?.currentShoulderVector)} />
           <Item label="Neutral hip vector" value={v3(f?.neutralHipVector)} />
           <Item label="Current hip vector" value={v3(f?.currentHipVector)} />
-          <Item label="Shoulder rotation from neutral" value={deg(f?.shoulderRotationDeg)} />
-          <Item label="Pelvis rotation from neutral" value={deg(f?.pelvisRotationDeg)} />
-          <Item label="Thoracic (shoulder vs pelvis)" value={deg(f?.thoracicRotationDeg)} />
+          <Item label="Live shoulder yaw" value={deg(f?.liveShoulderYawDeg)} />
+          <Item label="Neutral shoulder yaw (sealed)" value={deg(f?.neutralShoulderYawDeg)} />
+          <Item label="RAW SHOULDER ROTATION" value={deg(f?.shoulderRotationDeg)} />
+          <Item label="PELVIS ROTATION" value={deg(f?.pelvisRotationDeg)} />
+          <Item label="THORACIC ROTATION" value={deg(f?.thoracicRotationDeg)} />
         </dl>
         <h3>Comparison log</h3>
         <dl className="readout">

@@ -6,13 +6,14 @@ export type ShoulderSide = "left" | "right";
 
 export type ObliqueState =
   | "SEARCHING"
-  | "POSITIONING"
+  | "ALIGNMENT"
   | "CALIBRATING"
-  | "READY"
+  | "WAITING_FOR_READY"
   | "READY_CONFIRMING"
   | "COUNTDOWN"
-  | "ACTIVE"
-  | "COMPLETE"
+  | "MEASURING"
+  | "TRIAL_COMPLETE"
+  | "SESSION_COMPLETE"
   | "INVALID";
 
 export type FrameValidity = "valid" | "warn" | "reject";
@@ -85,9 +86,15 @@ export type FrameDebug = {
   currentShoulderVector: V3 | null;
   neutralHipVector: V3 | null;
   currentHipVector: V3 | null;
+  /** Live absolute shoulder yaw (subject-right +). */
+  liveShoulderYawDeg: number | null;
+  /** Sealed neutral shoulder yaw — must not change during a trial. */
+  neutralShoulderYawDeg: number | null;
+  /** Signed shoulder yaw change from sealed neutral. */
   shoulderRotationDeg: number | null;
   pelvisRotationDeg: number | null;
   thoracicRotationDeg: number | null;
+  /** Directional raw TL ROM (shoulder-from-neutral in trial direction). */
   rawRom: number | null;
   filteredRom: number | null;
   maxRawRom: number | null;
@@ -99,6 +106,8 @@ export type FrameDebug = {
   occlusionActive: boolean;
   leftReconstructed: boolean;
   rightReconstructed: boolean;
+  /** True once per session after baseline is sealed; never rewritten mid-trial. */
+  baselineSealed: boolean;
 };
 
 export type ObliqueSnapshot = {
@@ -108,7 +117,10 @@ export type ObliqueSnapshot = {
   cameraMode: ObliqueCameraMode;
   direction: RotationDirection;
   countdownLabel: string | null;
+  /** 0–1 fill of the active measurement window only. Null outside MEASURING. */
+  captureProgress: number | null;
   captureRemainingMs: number | null;
+  captureWindowMs: number;
   thumbProgress: number;
   thumbSeen: boolean;
   canStart: boolean;
@@ -117,13 +129,20 @@ export type ObliqueSnapshot = {
   movementStarted: boolean;
   movementValid: boolean;
   measurementConfidence: number;
+  /** Signed shoulder rotation from sealed neutral (debug / live). */
+  shoulderRawDeg: number | null;
+  pelvisRawDeg: number | null;
+  thoracicRawDeg: number | null;
+  /** Directional current raw ROM (trial direction). */
   rawRom: number | null;
   filteredRom: number | null;
+  /** Running max of rawRom during MEASURING; frozen after TRIAL_COMPLETE. */
   maxRawRom: number | null;
   maxValidRom: number | null;
   leftResult: number | null;
   rightResult: number | null;
   asymmetryDeg: number | null;
+  bothDirectionsComplete: boolean;
   frame: FrameDebug;
   imagePose: Vec[];
   rawPose: Vec[];

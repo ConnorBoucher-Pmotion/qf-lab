@@ -35,8 +35,9 @@ export function drawObliqueOverlay(ctx: CanvasRenderingContext2D, width: number,
   dot(ctx, mx(midSh.x), midSh.y, 4, "#fff");
   dot(ctx, mx(midHip.x), midHip.y, 4, "#fff");
 
-  const angle = snapshot.filteredRom ?? snapshot.rawRom;
-  if (angle != null && (snapshot.movementStarted || snapshot.state === "COMPLETE")) {
+  // Always show live RAW shoulder-from-neutral when baseline exists (not only while measuring).
+  const angle = snapshot.shoulderRawDeg ?? snapshot.rawRom;
+  if (angle != null && snapshot.baselineReady) {
     const label = `${angle.toFixed(1)}°`;
     ctx.font = "600 28px system-ui, sans-serif";
     ctx.textAlign = "center";

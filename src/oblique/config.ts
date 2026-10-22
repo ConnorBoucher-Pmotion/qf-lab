@@ -35,7 +35,7 @@ export const OBLIQUE_CONFIG: ObliqueConfig = {
   minCalibrationFrames: 10,
   countdownMs: 3000,
   thumbStableMs: 2000,
-  captureWindowMs: 8000,
+  captureWindowMs: 5000,
   landmarkConfidence: 0.4,
   softLandmarkConfidence: 0.18,
   pelvisWarnDeg: 8,

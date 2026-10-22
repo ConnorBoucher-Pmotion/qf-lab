@@ -32,6 +32,8 @@ const EMPTY_FRAME: FrameDebug = {
   currentShoulderVector: null,
   neutralHipVector: null,
   currentHipVector: null,
+  liveShoulderYawDeg: null,
+  neutralShoulderYawDeg: null,
   shoulderRotationDeg: null,
   pelvisRotationDeg: null,
   thoracicRotationDeg: null,
@@ -46,16 +48,21 @@ const EMPTY_FRAME: FrameDebug = {
   occlusionActive: false,
   leftReconstructed: false,
   rightReconstructed: false,
+  baselineSealed: false,
 };
 
 /**
- * Experimental 45° (or 30°) TL Junction session.
+ * Experimental 45° TL Junction session.
  * Frontal TLSession is untouched — this is a parallel pipeline.
+ *
+ * Stages (separated):
+ * ALIGNMENT → WAITING_FOR_READY → COUNTDOWN → MEASURING → TRIAL_COMPLETE → STORE_RESULT
  */
 export class ObliqueSession {
   private config: ObliqueConfig;
   private direction: RotationDirection;
   private state: ObliqueState = "SEARCHING";
+  /** Sealed once per trial calibration. Never overwritten while measuring. */
   private baseline: ObliqueBaseline | null = null;
   private collector = new BaselineCollector();
   private occlusion = new OcclusionHandler();
@@ -71,6 +78,7 @@ export class ObliqueSession {
   private countdownSpan = 0;
   private movementStarted = false;
   private activeFor = 0;
+  /** Running max of directional RAW shoulder ROM during MEASURING. */
   private rawPeak: number | null = null;
   private validPeak: number | null = null;
   private lastRaw: number | null = null;
@@ -90,6 +98,9 @@ export class ObliqueSession {
   private events: Array<{ label: string; at: number }> = [];
   private startedAt: number | null = null;
   private weakFor = 0;
+  private logEvery = 0;
+  /** Frozen baseline shoulder yaw for assert-style debug (must match baseline.shoulderYawDeg). */
+  private sealedNeutralYaw: number | null = null;
 
   constructor(direction: RotationDirection = "right", config: Partial<ObliqueConfig> = {}) {
     this.direction = direction;
@@ -114,7 +125,7 @@ export class ObliqueSession {
 
   arm(now: number): void {
     if (!this.baseline || this.result || this.movementStarted || this.countdownEndsAt != null) return;
-    if (this.state !== "READY" && this.state !== "READY_CONFIRMING") return;
+    if (this.state !== "WAITING_FOR_READY" && this.state !== "READY_CONFIRMING") return;
     this.voiceLatch = true;
     if (this.config.countdownMs <= 0) {
       this.beginMeasuring(now);
@@ -129,7 +140,7 @@ export class ObliqueSession {
 
   hearReady(now: number): void {
     if (this.voiceLatch || !this.readyOpen) return;
-    if (this.state !== "READY" && this.state !== "READY_CONFIRMING") return;
+    if (this.state !== "WAITING_FOR_READY" && this.state !== "READY_CONFIRMING") return;
     this.note("Voice ready", now);
     this.arm(now);
   }
@@ -139,12 +150,11 @@ export class ObliqueSession {
     this.occlusion.reset();
     this.smoother.reset();
     this.baseline = null;
+    this.sealedNeutralYaw = null;
     this.state = "SEARCHING";
     this.clearAttempt();
     this.lastT = null;
     this.frameTimes = [];
-    this.leftResult = this.direction === "left" ? this.leftResult : this.leftResult;
-    // Keep completed opposite-side results across reset of unfinished attempt only via nextTrial.
   }
 
   nextTrial(): void {
@@ -152,15 +162,21 @@ export class ObliqueSession {
     this.occlusion.reset();
     this.smoother.reset();
     this.baseline = null;
+    this.sealedNeutralYaw = null;
     this.clearAttempt();
-    this.state = "POSITIONING";
+    this.state = "ALIGNMENT";
   }
 
   /** Store the finished direction and prepare the opposite side. */
   completeDirection(now: number): void {
-    if (this.result?.accepted) {
-      if (this.direction === "left") this.leftResult = this.result.validatedMaximum ?? this.result.rawMaximum;
-      else this.rightResult = this.result.validatedMaximum ?? this.result.rawMaximum;
+    if (this.result?.accepted && this.result.rawMaximum != null) {
+      if (this.direction === "left") this.leftResult = this.result.rawMaximum;
+      else this.rightResult = this.result.rawMaximum;
+    }
+    if (this.leftResult != null && this.rightResult != null) {
+      this.state = "SESSION_COMPLETE";
+      this.note("Session complete", now);
+      return;
     }
     const next: RotationDirection = this.direction === "right" ? "left" : "right";
     this.direction = next;
@@ -169,7 +185,12 @@ export class ObliqueSession {
   }
 
   wantsThumb(): boolean {
-    return (this.state === "READY" || this.state === "READY_CONFIRMING") && this.baseline != null && !this.movementStarted && this.result == null;
+    return (
+      (this.state === "WAITING_FOR_READY" || this.state === "READY_CONFIRMING") &&
+      this.baseline != null &&
+      !this.movementStarted &&
+      this.result == null
+    );
   }
 
   push(frame: { width: number; height: number; image: Vec[]; world: Vec[]; thumbUp?: boolean }, now: number): ObliqueSnapshot {
@@ -181,28 +202,58 @@ export class ObliqueSession {
     const rawSample = extractLandmarks(frame.world);
     if (!rawSample) {
       this.weakFor += dt;
-      this.state = this.movementStarted ? "ACTIVE" : "SEARCHING";
+      if (this.state !== "TRIAL_COMPLETE" && this.state !== "SESSION_COMPLETE" && this.state !== "INVALID") {
+        this.state = this.movementStarted ? "MEASURING" : "SEARCHING";
+      }
       return this.snapshot(frame.image, now, EMPTY_FRAME, null);
     }
 
+    // ---- Baseline calibration (sealed once; never rewritten while measuring) ----
     if (!this.baseline) {
       const built = this.collector.push(frame.world, dt, this.config, this.config.cameraMode);
       if (built) {
         this.baseline = built;
-        this.state = "READY";
+        this.sealedNeutralYaw = built.shoulderYawDeg;
+        this.state = "WAITING_FOR_READY";
         this.note("Calibration complete", now);
       } else {
-        this.state = this.collector.progress(this.config) > 0 ? "CALIBRATING" : "POSITIONING";
+        this.state = this.collector.progress(this.config) > 0 ? "CALIBRATING" : "ALIGNMENT";
       }
-      const frameDebug = this.debugFrame(rawSample, null, null, null, "BOTH_SHOULDERS", false, "both", false, false, "reject", "No pose");
-      return this.snapshot(frame.image, now, { ...frameDebug, frameValid: "warn", rejectReason: "" }, null);
+      const sVec = shoulderVector(rawSample);
+      const hVec = hipVector(rawSample);
+      const preview = computeRotation(sVec, hVec, this.baseline);
+      const frameDebug = this.debugFrame(
+        rawSample,
+        preview,
+        "BOTH_SHOULDERS",
+        false,
+        "both",
+        false,
+        false,
+        "warn",
+        ""
+      );
+      return this.snapshot(frame.image, now, frameDebug, null);
+    }
+
+    // Guard: baseline must stay sealed
+    if (this.sealedNeutralYaw != null && this.baseline.shoulderYawDeg !== this.sealedNeutralYaw) {
+      console.error("[oblique] BASELINE RESET DETECTED — restoring sealed neutral yaw", {
+        sealed: this.sealedNeutralYaw,
+        current: this.baseline.shoulderYawDeg,
+      });
+      this.baseline = { ...this.baseline, shoulderYawDeg: this.sealedNeutralYaw };
     }
 
     const occ = this.occlusion.apply(rawSample, this.direction, this.baseline, this.config);
     const sVec = shoulderVector(occ.sample);
     const hVec = hipVector(occ.sample);
     const reading = computeRotation(sVec, hVec, this.baseline);
-    const rawRom = directionalRom(reading.thoracicFromNeutralDeg, this.direction);
+
+    // PRIMARY RAW = shoulder XZ yaw vs sealed neutral (NOT thoracic-vs-pelvis).
+    // Thoracic relative often stays ~0° when hips track the shoulders in world space.
+    const signedShoulder = reading.shoulderFromNeutralDeg;
+    const rawRom = directionalRom(signedShoulder, this.direction);
     const spike = this.movementStarted && rawRom != null && isSpike(this.lastRaw, rawRom, dt, this.config);
     const validation = validateFrame({
       sample: occ.sample,
@@ -213,7 +264,6 @@ export class ObliqueSession {
       spike,
     });
 
-    // If chin snap on hidden side, prefer occlusion reconstruction already applied; if still snap, reject frame.
     const filtered = this.smoother.push(validation.validity === "reject" ? null : rawRom, this.config);
     this.lastShoulders = { left: occ.sample.leftShoulder, right: occ.sample.rightShoulder };
     if (rawRom != null && !spike) this.lastRaw = rawRom;
@@ -227,22 +277,31 @@ export class ObliqueSession {
     this.hipScoreSum += (vis(rawSample.leftHip) + vis(rawSample.rightHip)) / 2;
     this.scoreN += 1;
 
-    const movementValid = validation.validity !== "reject" && validation.reason !== "Pelvis unstable";
-    if (this.movementStarted && rawRom != null) {
+    // Track RAW MAX only during the active measurement window.
+    if (this.movementStarted && this.state === "MEASURING" && rawRom != null) {
       if (this.rawPeak == null || rawRom > this.rawPeak) this.rawPeak = rawRom;
-      if (movementValid && validation.validity === "valid" && (this.validPeak == null || rawRom > this.validPeak)) {
+      if (validation.validity === "valid" && (this.validPeak == null || rawRom > this.validPeak)) {
         this.validPeak = rawRom;
       }
     }
 
-    this.advance(now, dt, frame.thumbUp === true, validation.validity !== "reject");
+    this.logEvery += 1;
+    if (this.logEvery % 12 === 0) {
+      const ls = rawSample.leftShoulder;
+      const rs = rawSample.rightShoulder;
+      console.log(
+        `[oblique] state=${this.state}\nLS: x:${ls.x.toFixed(3)} y:${ls.y.toFixed(3)} z:${ls.z.toFixed(3)} v:${(ls.visibility ?? 0).toFixed(2)}\nRS: x:${rs.x.toFixed(3)} y:${rs.y.toFixed(3)} z:${rs.z.toFixed(3)} v:${(rs.visibility ?? 0).toFixed(2)}\nneutralYaw:${this.sealedNeutralYaw?.toFixed(1)} liveYaw:${reading.liveShoulderYawDeg?.toFixed(1)} shoulderFromNeutral:${signedShoulder?.toFixed(1)} pelvis:${reading.pelvisFromNeutralDeg?.toFixed(1)} thoracic:${reading.thoracicFromNeutralDeg?.toFixed(1)} raw:${rawRom?.toFixed(1)} maxRaw:${this.rawPeak?.toFixed(1)}`
+      );
+    }
+
+    if (this.state !== "TRIAL_COMPLETE" && this.state !== "SESSION_COMPLETE" && this.state !== "INVALID") {
+      this.advance(now, dt, frame.thumbUp === true, validation.validity !== "reject");
+    }
 
     const conf = this.confidencePct();
     const frameDebug = this.debugFrame(
       occ.sample,
-      reading.shoulderFromNeutralDeg,
-      reading.pelvisFromNeutralDeg,
-      reading.thoracicFromNeutralDeg,
+      reading,
       occ.mode,
       occ.occlusionActive,
       occ.reliableShoulder,
@@ -253,18 +312,17 @@ export class ObliqueSession {
     );
     frameDebug.rawRom = rawRom;
     frameDebug.filteredRom = filtered;
-    frameDebug.maxRawRom = this.movementStarted ? this.rawPeak : null;
-    frameDebug.maxValidRom = this.movementStarted ? this.validPeak : null;
+    frameDebug.maxRawRom = this.rawPeak;
+    frameDebug.maxValidRom = this.validPeak;
 
     return this.snapshot(frame.image, now, frameDebug, conf);
   }
 
   private advance(now: number, dt: number, thumbUp: boolean, trackingOk: boolean): void {
-    if (this.result && (this.state === "COMPLETE" || this.state === "INVALID")) return;
+    if (this.result && (this.state === "TRIAL_COMPLETE" || this.state === "INVALID" || this.state === "SESSION_COMPLETE")) return;
 
     if (!trackingOk && this.movementStarted) {
       this.weakFor += dt;
-      if (this.weakFor > this.config.trackingLostMs) this.state = "ACTIVE";
     } else this.weakFor = 0;
 
     if (this.countdownEndsAt != null) {
@@ -282,7 +340,7 @@ export class ObliqueSession {
       this.thumbSeen = this.readyOpen && thumbUp;
       if (this.readyOpen && thumbUp) this.thumbFor = Math.min(this.config.thumbStableMs, this.thumbFor + dt);
       else this.thumbFor = Math.max(0, this.thumbFor - dt * 3);
-      this.state = this.readyOpen && thumbUp && this.thumbFor > 0 ? "READY_CONFIRMING" : "READY";
+      this.state = this.readyOpen && thumbUp && this.thumbFor > 0 ? "READY_CONFIRMING" : "WAITING_FOR_READY";
       if (this.readyOpen && thumbUp && this.thumbFor >= this.config.thumbStableMs) {
         this.note("Thumbs up", now);
         this.arm(now);
@@ -295,7 +353,7 @@ export class ObliqueSession {
       this.finish(now);
       return;
     }
-    this.state = "ACTIVE";
+    this.state = "MEASURING";
   }
 
   private beginMeasuring(now: number): void {
@@ -318,15 +376,15 @@ export class ObliqueSession {
     this.hipScoreSum = 0;
     this.scoreN = 0;
     this.result = null;
-    this.state = "ACTIVE";
-    this.note("Rotation started", now);
+    this.state = "MEASURING";
+    this.note("Measurement started", now);
   }
 
   private finish(now: number): void {
     if (this.result) return;
-    const validated = this.validPeak;
     const raw = this.rawPeak;
-    const ok = validated != null && validated > 0;
+    const validated = this.validPeak;
+    const ok = raw != null && raw > 0;
     const conf = this.confidencePct();
     this.result = {
       id: `tl-oblique-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
@@ -341,15 +399,23 @@ export class ObliqueSession {
       occlusionEvents: this.occlusionEvents,
       maxPelvisRotationDeg: this.maxPelvis || null,
       instruction: ok
-        ? `${this.direction === "left" ? "Left" : "Right"} TL Junction (oblique) ${validated!.toFixed(1)}°.`
-        : "No valid rotation was captured in that direction.",
+        ? `${this.direction === "left" ? "Left" : "Right"} Raw Max ROM ${raw!.toFixed(1)}°.`
+        : "No raw rotation was captured in that direction.",
     };
-    if (ok) {
-      if (this.direction === "left") this.leftResult = validated;
-      else this.rightResult = validated;
+    // STORE_RESULT — commit Raw Max ROM as the trial result.
+    if (ok && raw != null) {
+      if (this.direction === "left") this.leftResult = raw;
+      else this.rightResult = raw;
     }
-    this.state = ok ? "COMPLETE" : "INVALID";
-    this.note(ok ? "Assessment complete" : "Assessment stopped", now);
+    this.movementStarted = false;
+    this.captureEndsAt = null;
+    if (this.leftResult != null && this.rightResult != null) {
+      this.state = "SESSION_COMPLETE";
+      this.note("Session complete", now);
+    } else {
+      this.state = "TRIAL_COMPLETE";
+      this.note("Trial complete", now);
+    }
   }
 
   private confidencePct(): number {
@@ -360,7 +426,7 @@ export class ObliqueSession {
       validFrameRatio: this.totalFrames ? 1 - this.invalidFrames / this.totalFrames : 0,
       occlusionEventRatio: this.totalFrames ? this.occlusionEvents / this.totalFrames : 0,
       pelvisStableRatio: this.totalFrames ? 1 - this.pelvisWarnFrames / this.totalFrames : 1,
-      endRangeClear: (this.validPeak ?? 0) > 15,
+      endRangeClear: (this.rawPeak ?? 0) > 15,
     });
   }
 
@@ -391,6 +457,7 @@ export class ObliqueSession {
     this.shoulderScoreSum = 0;
     this.hipScoreSum = 0;
     this.scoreN = 0;
+    this.logEvery = 0;
   }
 
   private note(label: string, now: number): void {
@@ -410,15 +477,16 @@ export class ObliqueSession {
   }
 
   private instruction(): string {
-    if (this.state === "COMPLETE") return this.result?.instruction ?? "Assessment complete.";
+    if (this.state === "SESSION_COMPLETE") return "TL JUNCTION COMPLETE";
+    if (this.state === "TRIAL_COMPLETE") return this.result?.instruction ?? "TRIAL COMPLETE";
     if (this.state === "INVALID") return this.result?.instruction ?? "Assessment stopped.";
     if (this.state === "SEARCHING") return "Waiting for pose. Sit upright with hands behind your head.";
-    if (this.state === "POSITIONING") return "Hold the neutral start position. Hips forward, torso upright.";
+    if (this.state === "ALIGNMENT") return "Hold the neutral start position. Hips forward, torso upright.";
     if (this.state === "CALIBRATING") return "Hold still. Capturing your neutral baseline (0°).";
-    if (this.state === "READY") return 'Say READY or give a thumbs up when you\'re ready.';
+    if (this.state === "WAITING_FOR_READY") return "SAY READY WHEN IN POSITION";
     if (this.state === "READY_CONFIRMING") return "👍 Ready gesture detected — keep holding.";
-    if (this.state === "COUNTDOWN") return "Ready! Get both hands behind your head.";
-    if (this.state === "ACTIVE") return this.direction === "left" ? "ROTATE LEFT" : "ROTATE RIGHT";
+    if (this.state === "COUNTDOWN") return "Get ready — keep hands behind your head.";
+    if (this.state === "MEASURING") return this.direction === "left" ? "ROTATE LEFT" : "ROTATE RIGHT";
     return "Hold still.";
   }
 
@@ -428,8 +496,8 @@ export class ObliqueSession {
       direction: this.direction,
       leftRom: this.leftResult,
       rightRom: this.rightResult,
-      rawRom: this.movementStarted ? this.rawPeak : null,
-      validatedRom: this.movementStarted ? this.validPeak : null,
+      rawRom: this.rawPeak,
+      validatedRom: this.validPeak,
       measurementConfidence: conf,
       poseConfidence: this.scoreN ? Math.round(((this.shoulderScoreSum + this.hipScoreSum) / (2 * this.scoreN)) * 100) : 0,
       invalidFramePct: this.totalFrames ? Math.round((this.invalidFrames / this.totalFrames) * 100) : 0,
@@ -440,9 +508,7 @@ export class ObliqueSession {
 
   private debugFrame(
     sample: ReturnType<typeof extractLandmarks>,
-    shoulderRot: number | null,
-    pelvisRot: number | null,
-    thoracic: number | null,
+    reading: ReturnType<typeof computeRotation>,
     mode: FrameDebug["occlusionMode"],
     occlusionActive: boolean,
     reliable: FrameDebug["reliableShoulder"],
@@ -451,7 +517,7 @@ export class ObliqueSession {
     validity: FrameDebug["frameValid"],
     reason: FrameDebug["rejectReason"]
   ): FrameDebug {
-    if (!sample) return { ...EMPTY_FRAME };
+    if (!sample) return { ...EMPTY_FRAME, baselineSealed: this.baseline != null };
     return {
       leftShoulder: sample.leftShoulder,
       rightShoulder: sample.rightShoulder,
@@ -465,9 +531,11 @@ export class ObliqueSession {
       currentShoulderVector: shoulderVector(sample),
       neutralHipVector: this.baseline?.hipVector ?? null,
       currentHipVector: hipVector(sample),
-      shoulderRotationDeg: shoulderRot,
-      pelvisRotationDeg: pelvisRot,
-      thoracicRotationDeg: thoracic,
+      liveShoulderYawDeg: reading.liveShoulderYawDeg,
+      neutralShoulderYawDeg: reading.neutralShoulderYawDeg ?? this.sealedNeutralYaw,
+      shoulderRotationDeg: reading.shoulderFromNeutralDeg,
+      pelvisRotationDeg: reading.pelvisFromNeutralDeg,
+      thoracicRotationDeg: reading.thoracicFromNeutralDeg,
       rawRom: null,
       filteredRom: null,
       maxRawRom: null,
@@ -479,6 +547,7 @@ export class ObliqueSession {
       occlusionActive,
       leftReconstructed: leftRecon,
       rightReconstructed: rightRecon,
+      baselineSealed: this.baseline != null,
     };
   }
 
@@ -487,6 +556,12 @@ export class ObliqueSession {
     const asym =
       this.leftResult != null && this.rightResult != null ? Math.abs(this.leftResult - this.rightResult) : null;
     const origin = this.startedAt ?? this.events[0]?.at ?? now;
+    const measuring = this.state === "MEASURING" && this.captureEndsAt != null;
+    const remaining = measuring ? Math.max(0, this.captureEndsAt! - now) : null;
+    const progress =
+      measuring && this.config.captureWindowMs > 0
+        ? Math.min(1, Math.max(0, 1 - remaining! / this.config.captureWindowMs))
+        : null;
     return {
       state: this.state,
       instruction: this.instruction(),
@@ -494,22 +569,28 @@ export class ObliqueSession {
       cameraMode: this.config.cameraMode,
       direction: this.direction,
       countdownLabel: this.countdownLabel(now),
-      captureRemainingMs: this.captureEndsAt == null ? null : Math.max(0, this.captureEndsAt - now),
+      captureProgress: progress,
+      captureRemainingMs: remaining,
+      captureWindowMs: this.config.captureWindowMs,
       thumbProgress: this.config.thumbStableMs <= 0 ? 0 : Math.max(0, Math.min(1, this.thumbFor / this.config.thumbStableMs)),
       thumbSeen: this.thumbSeen,
-      canStart: this.readyOpen,
+      canStart: this.readyOpen && (this.state === "WAITING_FOR_READY" || this.state === "READY_CONFIRMING"),
       baselineReady: this.baseline != null,
       calibrationProgress: this.baseline ? 1 : this.collector.progress(this.config),
       movementStarted: this.movementStarted,
       movementValid: frame.frameValid === "valid",
       measurementConfidence: confidence,
+      shoulderRawDeg: frame.shoulderRotationDeg,
+      pelvisRawDeg: frame.pelvisRotationDeg,
+      thoracicRawDeg: frame.thoracicRotationDeg,
       rawRom: frame.rawRom,
       filteredRom: frame.filteredRom,
-      maxRawRom: frame.maxRawRom,
-      maxValidRom: frame.maxValidRom,
+      maxRawRom: this.rawPeak,
+      maxValidRom: this.validPeak,
       leftResult: this.leftResult,
       rightResult: this.rightResult,
       asymmetryDeg: asym,
+      bothDirectionsComplete: this.leftResult != null && this.rightResult != null,
       frame,
       imagePose: image,
       rawPose: image,

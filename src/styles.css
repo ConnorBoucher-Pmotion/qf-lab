@@ -506,6 +506,60 @@ button.primary { background: #d7e6f5; color: #102033; }
 }
 .eyebrow { margin: 0; color: #7eb6ff; font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; }
 .warn { color: #e6b325; }
+.instruction-ready {
+  color: #7dffb0;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.measure-progress {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+  z-index: 4;
+}
+.measure-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3ddc84, #7eb6ff);
+  transition: width 80ms linear;
+}
+.measure-progress-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+}
+.oblique-hud {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 5;
+  max-width: min(420px, 92%);
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #e8f0f8;
+  font: 600 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+.oblique-hud div + div { margin-top: 0.1rem; }
+.result-card .result-hero {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 2.4rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
 @media (max-width: 700px) {
   .chooser-grid { grid-template-columns: 1fr; }
 }

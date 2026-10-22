@@ -65,6 +65,7 @@ export function ObliqueCameraView({ direction, config, resetSignal, nextSignal, 
     let lastDetectTs = -1;
     let lastUi = 0;
     let lastState = "";
+    let lastRawKey = "";
     let stream: MediaStream | null = null;
     let landmarker: PoseLandmarkerHandle | null = null;
     let gestures: GestureHandle | null = null;
@@ -79,8 +80,10 @@ export function ObliqueCameraView({ direction, config, resetSignal, nextSignal, 
     const ctx = canvas.getContext("2d");
 
     const publish = (snapshot: ObliqueSnapshot, now: number) => {
-      if (snapshot.state !== lastState || now - lastUi > 80) {
+      const rawKey = `${snapshot.rawRom?.toFixed(1)}|${snapshot.maxRawRom?.toFixed(1)}|${snapshot.shoulderRawDeg?.toFixed(1)}|${snapshot.captureProgress?.toFixed(2)}`;
+      if (snapshot.state !== lastState || rawKey !== lastRawKey || now - lastUi > 50) {
         lastState = snapshot.state;
+        lastRawKey = rawKey;
         lastUi = now;
         onSnapshotRef.current(snapshot);
       }
