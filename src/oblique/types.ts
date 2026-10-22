@@ -133,6 +133,16 @@ export type FrameDebug = {
   comparisonChangeDeg: number | null;
   pelvisSubtractDeg: number;
   readyBaselineCaptured: boolean;
+  /** Absolute / baseline / change for shoulder-axis & hip-axis yaw. */
+  absoluteShoulderYawDeg: number | null;
+  baselineShoulderYawDeg: number | null;
+  shoulderYawChangeDeg: number | null;
+  absoluteHipYawDeg: number | null;
+  baselineHipYawDeg: number | null;
+  hipYawChangeDeg: number | null;
+  signedTlRotationDeg: number | null;
+  /** Experimental old: primary shoulder→hipMid arc (not used for Raw Max). */
+  experimentalOldPrimaryDeg: number | null;
 };
 
 export type ObliqueSnapshot = {

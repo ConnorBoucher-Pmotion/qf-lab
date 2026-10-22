@@ -156,8 +156,7 @@ export function ObliqueApp({ onBack }: Props) {
               <h2>RAW MAX ROM</h2>
               <p className="result-hero">{deg(snapshot?.maxRawRom ?? snapshot?.result?.rawMaximum)}</p>
               <p className="mic-note">
-                {snapshot?.direction === "left" ? "LEFT" : "RIGHT"} ROTATION · primary{" "}
-                {(snapshot?.frame.primaryLandmark ?? (direction === "right" ? "left" : "right")).toUpperCase()} shoulder
+                {snapshot?.direction === "left" ? "LEFT" : "RIGHT"} ROTATION · thorax yaw − pelvis yaw
                 {snapshot?.state === "TRIAL_COMPLETE" || snapshot?.state === "SESSION_COMPLETE" ? " · TRIAL COMPLETE" : ""}
               </p>
               <dl className="readout">
@@ -176,23 +175,23 @@ export function ObliqueApp({ onBack }: Props) {
               </dl>
             </section>
             <section className="gate-box">
-              <h2>Primary / comparison</h2>
+              <h2>Thorax / pelvis</h2>
               <dl className="readout">
                 <div>
-                  <dt>Primary Δ</dt>
-                  <dd>{deg(snapshot?.frame.primaryChangeFromBaselineDeg)}</dd>
+                  <dt>Shoulder Δ</dt>
+                  <dd>{deg(snapshot?.frame.shoulderYawChangeDeg)}</dd>
                 </div>
                 <div>
-                  <dt>Comparison Δ</dt>
-                  <dd>{deg(snapshot?.frame.comparisonChangeDeg)}</dd>
+                  <dt>Hip Δ</dt>
+                  <dd>{deg(snapshot?.frame.hipYawChangeDeg)}</dd>
                 </div>
                 <div>
-                  <dt>Pelvis Δ</dt>
-                  <dd>{deg(snapshot?.pelvisRawDeg)}</dd>
+                  <dt>Signed TL</dt>
+                  <dd>{deg(snapshot?.frame.signedTlRotationDeg)}</dd>
                 </div>
                 <div>
-                  <dt>Old shoulder-line</dt>
-                  <dd>{deg(snapshot?.frame.oldShoulderLineDeg)}</dd>
+                  <dt>Old pivot (debug)</dt>
+                  <dd>{deg(snapshot?.frame.experimentalOldPrimaryDeg)}</dd>
                 </div>
               </dl>
             </section>
@@ -228,29 +227,27 @@ function LiveDebugHud({ snapshot }: { snapshot: ObliqueSnapshot | null }) {
   const f = snapshot.frame;
   const ls = f.leftShoulder;
   const rs = f.rightShoulder;
+  const lh = f.leftHip;
+  const rh = f.rightHip;
   return (
     <div className="oblique-hud">
       <div>TRIAL: {snapshot.direction.toUpperCase()} ROTATION</div>
       <div>STATE: {snapshot.state}</div>
-      <div>PRIMARY LANDMARK: {(f.primaryLandmark ?? "—").toUpperCase()} SHOULDER</div>
-      <div>PRIMARY CONFIDENCE: {Math.round(f.primaryConfidence * 100)}%</div>
-      <div>STARTING PRIMARY ANGLE: {deg(f.startingPrimaryAngleDeg)}</div>
-      <div>CURRENT PRIMARY ANGLE: {deg(f.currentPrimaryAngleDeg)}</div>
-      <div>PRIMARY CHANGE FROM BASELINE: {deg(f.primaryChangeFromBaselineDeg)}</div>
-      <div>
-        {f.comparisonLandmark?.toUpperCase() ?? "OPP"} SHOULDER COMPARISON: {deg(f.comparisonChangeDeg)}
-      </div>
-      <div>PELVIS ROTATION: {deg(f.pelvisRotationDeg)}</div>
-      <div>CURRENT RAW TL ROM: {deg(snapshot.rawRom)}</div>
-      <div>RAW MAX: {deg(snapshot.maxRawRom)}</div>
-      <div>OLD SHOULDER-LINE: {deg(f.oldShoulderLineDeg)}</div>
+      <div>ABSOLUTE SHOULDER YAW: {deg(f.absoluteShoulderYawDeg)}</div>
+      <div>BASELINE SHOULDER YAW: {deg(f.baselineShoulderYawDeg)}</div>
+      <div>SHOULDER YAW CHANGE: {deg(f.shoulderYawChangeDeg)}</div>
+      <div>ABSOLUTE HIP YAW: {deg(f.absoluteHipYawDeg)}</div>
+      <div>BASELINE HIP YAW: {deg(f.baselineHipYawDeg)}</div>
+      <div>HIP YAW CHANGE: {deg(f.hipYawChangeDeg)}</div>
+      <div>SIGNED TL ROTATION: {deg(f.signedTlRotationDeg)}</div>
+      <div>CURRENT RAW ROM: {deg(snapshot.rawRom)}</div>
+      <div>RAW MAX ROM: {deg(snapshot.maxRawRom)}</div>
+      <div>EXPERIMENTAL OLD METHOD: {deg(f.experimentalOldPrimaryDeg)}</div>
       <div>BASELINE CAPTURED: {f.readyBaselineCaptured ? "YES" : "NO"}</div>
-      <div>
-        LS: {ls ? `${ls.x.toFixed(2)}/${ls.y.toFixed(2)}/${ls.z.toFixed(2)}` : "—"}
-      </div>
-      <div>
-        RS: {rs ? `${rs.x.toFixed(2)}/${rs.y.toFixed(2)}/${rs.z.toFixed(2)}` : "—"}
-      </div>
+      <div>LS: {ls ? `${ls.x.toFixed(2)}/${ls.y.toFixed(2)}/${ls.z.toFixed(2)}` : "—"}</div>
+      <div>RS: {rs ? `${rs.x.toFixed(2)}/${rs.y.toFixed(2)}/${rs.z.toFixed(2)}` : "—"}</div>
+      <div>LH: {lh ? `${lh.x.toFixed(2)}/${lh.y.toFixed(2)}/${lh.z.toFixed(2)}` : "—"}</div>
+      <div>RH: {rh ? `${rh.x.toFixed(2)}/${rh.y.toFixed(2)}/${rh.z.toFixed(2)}` : "—"}</div>
       <div>
         TIME REMAINING:{" "}
         {snapshot.state === "MEASURING" && snapshot.captureRemainingMs != null

@@ -1,27 +1,33 @@
 import type { LandmarkSample, RotationDirection } from "./types";
 import {
+  computeAxisYawRom,
+  sealAxisYawBaseline,
+  type AxisYawReading,
+  type AxisYawReadyBaseline,
+} from "./axisYawRom";
+import {
   computePrimaryRom,
   primarySide,
   comparisonSide,
   sealReadyBaseline,
-  type PrimaryRomReading,
-  type ReadyBaseline,
+  type ReadyBaseline as OldPivotBaseline,
 } from "./primaryShoulderRom";
 
-export type { PrimaryRomReading, ReadyBaseline };
+export type { AxisYawReading, AxisYawReadyBaseline, OldPivotBaseline };
 export { primarySide, comparisonSide, computePrimaryRom, sealReadyBaseline };
+export { computeAxisYawRom, sealAxisYawBaseline };
 
-/** Positive magnitude in the active trial direction (already trial-positive input). */
+/** Positive magnitude already mapped to the trial direction. */
 export function directionalRom(signedTrialPositive: number | null, _direction: RotationDirection): number | null {
   if (signedTrialPositive == null || !Number.isFinite(signedTrialPositive)) return null;
   return Math.max(0, signedTrialPositive);
 }
 
-export function computeSideSpecificRom(
+export function computeThoraxPelvisRom(
   sample: LandmarkSample,
-  ready: ReadyBaseline | null,
+  baseline: AxisYawReadyBaseline | null,
   direction: RotationDirection,
-  pelvisDeadbandDeg: number
-): PrimaryRomReading {
-  return computePrimaryRom(sample, ready, direction, pelvisDeadbandDeg);
+  oldPivotBaseline: OldPivotBaseline | null
+): AxisYawReading {
+  return computeAxisYawRom(sample, baseline, direction, oldPivotBaseline);
 }

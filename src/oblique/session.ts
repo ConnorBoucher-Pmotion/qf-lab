@@ -6,16 +6,18 @@ import { extractLandmarks, vis } from "./landmarks";
 import { OcclusionHandler } from "./occlusion";
 import {
   comparisonSide,
-  computeSideSpecificRom,
+  computeThoraxPelvisRom,
   directionalRom,
   primarySide,
+  sealAxisYawBaseline,
   sealReadyBaseline,
-  type PrimaryRomReading,
-  type ReadyBaseline,
+  type AxisYawReading,
+  type AxisYawReadyBaseline,
+  type OldPivotBaseline,
 } from "./rotation";
 import { AngleSmoother, isSpike } from "./temporal";
 import { validateFrame } from "./validation";
-import { hipVector } from "./vectors";
+import { hipVector, shoulderVector } from "./vectors";
 import type {
   ComparisonRecord,
   FrameDebug,
@@ -71,6 +73,14 @@ const EMPTY_FRAME: FrameDebug = {
   comparisonChangeDeg: null,
   pelvisSubtractDeg: 0,
   readyBaselineCaptured: false,
+  absoluteShoulderYawDeg: null,
+  baselineShoulderYawDeg: null,
+  shoulderYawChangeDeg: null,
+  absoluteHipYawDeg: null,
+  baselineHipYawDeg: null,
+  hipYawChangeDeg: null,
+  signedTlRotationDeg: null,
+  experimentalOldPrimaryDeg: null,
 };
 
 /**
@@ -86,8 +96,10 @@ export class ObliqueSession {
   private state: ObliqueState = "SEARCHING";
   /** Pose-calibration baseline (alignment / chin checks). Not the 0° ROM origin. */
   private baseline: ObliqueBaseline | null = null;
-  /** HARD 0° origin — sealed only when READY is accepted. Never rewritten mid-trial. */
-  private readyBaseline: ReadyBaseline | null = null;
+  /** HARD 0° origin — shoulder/hip axis yaw sealed at READY. Never rewritten mid-trial. */
+  private readyBaseline: AxisYawReadyBaseline | null = null;
+  /** Old shoulder→hipMid arc baseline (debug comparison only). */
+  private oldPivotBaseline: OldPivotBaseline | null = null;
   private collector = new BaselineCollector();
   private occlusion = new OcclusionHandler();
   private smoother = new AngleSmoother();
@@ -150,18 +162,19 @@ export class ObliqueSession {
     if (!this.baseline || this.result || this.movementStarted || this.countdownEndsAt != null) return;
     if (this.state !== "WAITING_FOR_READY" && this.state !== "READY_CONFIRMING") return;
     if (!this.lastSample) return;
-    // HARD ZERO: whatever orientation exists at READY becomes 0.0°.
-    const sealed = sealReadyBaseline(this.lastSample, this.direction, now);
+    // HARD ZERO: absolute shoulder/hip yaw at READY becomes the 0° origin.
+    const sealed = sealAxisYawBaseline(this.lastSample, this.direction, now);
     if (!sealed) return;
     this.readyBaseline = sealed;
+    this.oldPivotBaseline = sealReadyBaseline(this.lastSample, this.direction, now);
     this.rawPeak = 0;
     this.validPeak = 0;
     this.lastRaw = 0;
     this.voiceLatch = true;
     this.note("BASELINE CAPTURED", now);
     console.log(
-      `[oblique] BASELINE CAPTURED direction=${this.direction} primary=${sealed.primarySide} ` +
-        `primaryBearing=${sealed.primaryBearingDeg.toFixed(1)} → ROM 0.0°`
+      `[oblique] BASELINE CAPTURED direction=${this.direction} ` +
+        `absShoulderYaw=${sealed.baselineShoulderYawDeg.toFixed(1)}° absHipYaw=${sealed.baselineHipYawDeg.toFixed(1)}° → TL ROM 0.0°`
     );
     if (this.config.countdownMs <= 0) {
       this.beginMeasuring(now);
@@ -187,6 +200,7 @@ export class ObliqueSession {
     this.smoother.reset();
     this.baseline = null;
     this.readyBaseline = null;
+    this.oldPivotBaseline = null;
     this.lastSample = null;
     this.state = "SEARCHING";
     this.clearAttempt();
@@ -200,6 +214,7 @@ export class ObliqueSession {
     this.smoother.reset();
     this.baseline = null;
     this.readyBaseline = null;
+    this.oldPivotBaseline = null;
     this.lastSample = null;
     this.clearAttempt();
     this.state = "ALIGNMENT";
@@ -258,22 +273,21 @@ export class ObliqueSession {
       } else {
         this.state = this.collector.progress(this.config) > 0 ? "CALIBRATING" : "ALIGNMENT";
       }
-      const preview = computeSideSpecificRom(rawSample, this.readyBaseline, this.direction, this.config.pelvisDeadbandDeg);
+      const preview = computeThoraxPelvisRom(rawSample, this.readyBaseline, this.direction, this.oldPivotBaseline);
       const frameDebug = this.debugFrame(rawSample, preview, "BOTH_SHOULDERS", false, "both", false, false, "warn", "");
       return this.snapshot(frame.image, now, frameDebug, null);
     }
 
-    // Guard: READY baseline must never rewrite once sealed.
-    const sealedPrimary = this.readyBaseline?.primaryBearingDeg;
-    if (this.readyBaseline && sealedPrimary != null && this.readyBaseline.primaryBearingDeg !== sealedPrimary) {
-      console.error("[oblique] READY baseline mutated — ignoring");
+    // Guard: READY absolute yaw baselines must never rewrite.
+    if (this.readyBaseline) {
+      // only unwrap fields mutate; baselineShoulderYawDeg / baselineHipYawDeg are immutable
     }
 
     const occ = this.occlusion.apply(rawSample, this.direction, this.baseline, this.config);
-    // PRIMARY uses live world landmarks (raw sample) — never average with occluded comparison.
-    const reading = computeSideSpecificRom(rawSample, this.readyBaseline, this.direction, this.config.pelvisDeadbandDeg);
-    const rawRom = this.readyBaseline ? directionalRom(reading.rawTlRomDeg, this.direction) : null;
-    // Before READY, force live display to 0 so absolute camera angle never shows.
+    // PRIMARY: thorax axis yaw − pelvis axis yaw vs READY (world landmarks, continuous unwrap).
+    const reading = computeThoraxPelvisRom(rawSample, this.readyBaseline, this.direction, this.oldPivotBaseline);
+    const rawRom = this.readyBaseline ? directionalRom(reading.currentRawRomDeg, this.direction) : null;
+    // Before READY, force live display to 0 so absolute camera yaw never shows as ROM.
     const displayRaw = this.readyBaseline ? rawRom : 0;
 
     const spike = this.movementStarted && rawRom != null && isSpike(this.lastRaw, rawRom, dt, this.config);
@@ -281,7 +295,7 @@ export class ObliqueSession {
       sample: occ.sample,
       baseline: this.baseline,
       lastShoulders: this.lastShoulders,
-      pelvisFromNeutralDeg: reading.pelvisChangeDeg,
+      pelvisFromNeutralDeg: reading.hipYawChangeDeg,
       config: this.config,
       spike,
     });
@@ -294,12 +308,12 @@ export class ObliqueSession {
     if (validation.validity === "reject") this.invalidFrames += 1;
     if (occ.occlusionActive) this.occlusionEvents += 1;
     if (validation.reason === "Pelvis unstable") this.pelvisWarnFrames += 1;
-    if (reading.pelvisChangeDeg != null) this.maxPelvis = Math.max(this.maxPelvis, Math.abs(reading.pelvisChangeDeg));
+    if (reading.hipYawChangeDeg != null) this.maxPelvis = Math.max(this.maxPelvis, Math.abs(reading.hipYawChangeDeg));
     this.shoulderScoreSum += (vis(rawSample.leftShoulder) + vis(rawSample.rightShoulder)) / 2;
     this.hipScoreSum += (vis(rawSample.leftHip) + vis(rawSample.rightHip)) / 2;
     this.scoreN += 1;
 
-    // Track RAW MAX only during the active measurement window (primary shoulder only).
+    // Raw Max only from trial-direction thorax−pelvis ROM during MEASURING.
     if (this.movementStarted && this.state === "MEASURING" && rawRom != null) {
       if (this.rawPeak == null || rawRom > this.rawPeak) this.rawPeak = rawRom;
       if (validation.validity === "valid" && (this.validPeak == null || rawRom > this.validPeak)) {
@@ -309,14 +323,11 @@ export class ObliqueSession {
 
     this.logEvery += 1;
     if (this.logEvery % 12 === 0) {
-      const ps = primarySide(this.direction);
-      const primaryLm = ps === "left" ? rawSample.leftShoulder : rawSample.rightShoulder;
       console.log(
-        `[oblique] state=${this.state} trial=${this.direction} primary=${ps}\n` +
-          `primary xyz: ${primaryLm.x.toFixed(3)},${primaryLm.y.toFixed(3)},${primaryLm.z.toFixed(3)} conf=${(primaryLm.visibility ?? 0).toFixed(2)}\n` +
-          `primaryΔ:${reading.primaryChangeDeg?.toFixed(1)} comparisonΔ:${reading.comparisonChangeDeg?.toFixed(1)} ` +
-          `pelvisΔ:${reading.pelvisChangeDeg?.toFixed(1)} subtract:${reading.pelvisSubtractDeg.toFixed(1)} ` +
-          `rawTL:${displayRaw?.toFixed(1)} maxRaw:${this.rawPeak?.toFixed(1)} oldLine:${reading.oldShoulderLineFromReadyDeg?.toFixed(1)}`
+        `[oblique] state=${this.state} trial=${this.direction}\n` +
+          `absSh:${reading.absoluteShoulderYawDeg?.toFixed(1)} baseSh:${reading.baselineShoulderYawDeg?.toFixed(1)} Δsh:${reading.shoulderYawChangeDeg?.toFixed(1)}\n` +
+          `absHip:${reading.absoluteHipYawDeg?.toFixed(1)} baseHip:${reading.baselineHipYawDeg?.toFixed(1)} Δhip:${reading.hipYawChangeDeg?.toFixed(1)}\n` +
+          `signedTL:${reading.signedTlRotationDeg?.toFixed(1)} raw:${displayRaw?.toFixed(1)} max:${this.rawPeak?.toFixed(1)} oldPivot:${reading.experimentalOldPrimaryDeg?.toFixed(1)}`
       );
     }
 
@@ -473,6 +484,7 @@ export class ObliqueSession {
     this.lastRaw = null;
     this.lastShoulders = null;
     this.readyBaseline = null;
+    this.oldPivotBaseline = null;
     this.result = null;
     this.events = [];
     this.startedAt = null;
@@ -536,7 +548,7 @@ export class ObliqueSession {
 
   private debugFrame(
     sample: ReturnType<typeof extractLandmarks>,
-    reading: PrimaryRomReading,
+    reading: AxisYawReading,
     mode: FrameDebug["occlusionMode"],
     occlusionActive: boolean,
     reliable: FrameDebug["reliableShoulder"],
@@ -554,12 +566,6 @@ export class ObliqueSession {
         comparisonLandmark: comparisonSide(this.direction),
       };
     }
-    const baselineVec = this.readyBaseline
-      ? { x: this.readyBaseline.primaryVector.x, y: this.readyBaseline.primaryVector.y, z: this.readyBaseline.primaryVector.z }
-      : null;
-    const currentVec = reading.currentPrimaryVector
-      ? { x: reading.currentPrimaryVector.x, y: 0, z: reading.currentPrimaryVector.z }
-      : null;
     return {
       leftShoulder: sample.leftShoulder,
       rightShoulder: sample.rightShoulder,
@@ -569,18 +575,18 @@ export class ObliqueSession {
       rightShoulderConfidence: vis(sample.rightShoulder),
       leftHipConfidence: vis(sample.leftHip),
       rightHipConfidence: vis(sample.rightHip),
-      neutralShoulderVector: baselineVec,
-      currentShoulderVector: currentVec,
+      neutralShoulderVector: this.baseline?.shoulderVector ?? null,
+      currentShoulderVector: shoulderVector(sample),
       neutralHipVector: this.baseline?.hipVector ?? null,
       currentHipVector: hipVector(sample),
-      liveShoulderYawDeg: reading.currentPrimaryBearingDeg,
-      neutralShoulderYawDeg: reading.startingPrimaryBearingDeg,
-      oldShoulderLineDeg: reading.oldShoulderLineFromReadyDeg,
-      upperTorsoYawDeg: reading.primaryChangeDeg,
-      pelvisRotationDeg: reading.pelvisChangeDeg,
-      thoracicRotationDeg: reading.rawTlRomDeg,
-      multiLandmarkYawDeg: reading.comparisonChangeDeg,
-      shoulderRotationDeg: reading.primaryChangeDeg,
+      liveShoulderYawDeg: reading.absoluteShoulderYawDeg,
+      neutralShoulderYawDeg: reading.baselineShoulderYawDeg,
+      oldShoulderLineDeg: reading.experimentalOldPrimaryDeg,
+      upperTorsoYawDeg: reading.shoulderYawChangeDeg,
+      pelvisRotationDeg: reading.hipYawChangeDeg,
+      thoracicRotationDeg: reading.signedTlRotationDeg,
+      multiLandmarkYawDeg: reading.experimentalOldPrimaryDeg,
+      shoulderRotationDeg: reading.shoulderYawChangeDeg,
       rawRom: null,
       filteredRom: null,
       maxRawRom: null,
@@ -593,16 +599,24 @@ export class ObliqueSession {
       leftReconstructed: leftRecon,
       rightReconstructed: rightRecon,
       baselineSealed: this.readyBaseline != null,
-      primaryLandmark: reading.primarySide,
-      comparisonLandmark: reading.comparisonSide,
-      primaryConfidence: reading.primaryConfidence,
-      comparisonConfidence: reading.comparisonConfidence,
-      startingPrimaryAngleDeg: reading.startingPrimaryBearingDeg,
-      currentPrimaryAngleDeg: reading.currentPrimaryBearingDeg,
-      primaryChangeFromBaselineDeg: reading.primaryChangeDeg,
-      comparisonChangeDeg: reading.comparisonChangeDeg,
-      pelvisSubtractDeg: reading.pelvisSubtractDeg,
+      primaryLandmark: primarySide(this.direction),
+      comparisonLandmark: comparisonSide(this.direction),
+      primaryConfidence: reading.leftShoulderConfidence,
+      comparisonConfidence: reading.rightShoulderConfidence,
+      startingPrimaryAngleDeg: reading.baselineShoulderYawDeg,
+      currentPrimaryAngleDeg: reading.absoluteShoulderYawDeg,
+      primaryChangeFromBaselineDeg: reading.shoulderYawChangeDeg,
+      comparisonChangeDeg: reading.hipYawChangeDeg,
+      pelvisSubtractDeg: Math.abs(reading.hipYawChangeDeg ?? 0),
       readyBaselineCaptured: this.readyBaseline != null,
+      absoluteShoulderYawDeg: reading.absoluteShoulderYawDeg,
+      baselineShoulderYawDeg: reading.baselineShoulderYawDeg,
+      shoulderYawChangeDeg: reading.shoulderYawChangeDeg,
+      absoluteHipYawDeg: reading.absoluteHipYawDeg,
+      baselineHipYawDeg: reading.baselineHipYawDeg,
+      hipYawChangeDeg: reading.hipYawChangeDeg,
+      signedTlRotationDeg: reading.signedTlRotationDeg,
+      experimentalOldPrimaryDeg: reading.experimentalOldPrimaryDeg,
     };
   }
 
@@ -635,9 +649,9 @@ export class ObliqueSession {
       movementStarted: this.movementStarted,
       movementValid: frame.frameValid === "valid",
       measurementConfidence: confidence,
-      shoulderRawDeg: frame.primaryChangeFromBaselineDeg,
-      pelvisRawDeg: frame.pelvisRotationDeg,
-      thoracicRawDeg: frame.thoracicRotationDeg,
+      shoulderRawDeg: frame.shoulderYawChangeDeg,
+      pelvisRawDeg: frame.hipYawChangeDeg,
+      thoracicRawDeg: frame.signedTlRotationDeg,
       rawRom: frame.rawRom,
       filteredRom: frame.filteredRom,
       maxRawRom: this.readyBaseline ? this.rawPeak : 0,

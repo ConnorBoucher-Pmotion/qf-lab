@@ -9,9 +9,6 @@ type Props = {
 
 export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
   const f = snapshot?.frame;
-  const trial = snapshot?.direction === "left" ? "LEFT ROTATION" : "RIGHT ROTATION";
-  const primary = (f?.primaryLandmark ?? "—").toUpperCase();
-  const comparison = (f?.comparisonLandmark ?? "—").toUpperCase();
   return (
     <section className="debug">
       <button type="button" className="debug-toggle" onClick={onToggle}>
@@ -19,39 +16,33 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
       </button>
       <div className="debug-body" hidden={!open}>
         <p className="provisional">
-          45° experiment · side-specific primary shoulder arc around hip pivot (world XZ) · READY = hard 0° · comparison
-          shoulder never averaged into Raw Max · no physiological clamp.
+          Primary ROM = unwrapped shoulder-axis yaw change − hip-axis yaw change vs READY (world landmarks). Camera
+          angle is irrelevant. No physiological clamp. Old shoulder→hipMid arc kept as experimental comparison only.
         </p>
-        <h3>Trial</h3>
+        <h3>Thorax vs pelvis</h3>
         <dl className="readout">
           <Item label="CAMERA MODE" value={snapshot ? cameraModeLabel(snapshot.cameraMode).toUpperCase() : "—"} />
           <Item label="STATE" value={snapshot?.state ?? "—"} />
-          <Item label="TRIAL" value={trial} />
-          <Item label="PRIMARY LANDMARK" value={`${primary} SHOULDER`} />
-          <Item label="PRIMARY CONFIDENCE" value={pct(f?.primaryConfidence)} />
-          <Item label="STARTING PRIMARY ANGLE" value={deg(f?.startingPrimaryAngleDeg)} />
-          <Item label="CURRENT PRIMARY ANGLE" value={deg(f?.currentPrimaryAngleDeg)} />
-          <Item label="PRIMARY CHANGE FROM BASELINE" value={deg(f?.primaryChangeFromBaselineDeg)} />
-          <Item label={`${comparison} SHOULDER COMPARISON`} value={deg(f?.comparisonChangeDeg)} />
-          <Item label="PELVIS ROTATION" value={deg(f?.pelvisRotationDeg)} />
-          <Item label="PELVIS SUBTRACT (deadband)" value={deg(f?.pelvisSubtractDeg)} />
-          <Item label="CURRENT RAW TL ROM" value={deg(snapshot?.rawRom)} />
-          <Item label="FILTERED CURRENT ROM" value={deg(snapshot?.filteredRom)} />
-          <Item label="RAW MAX" value={deg(snapshot?.maxRawRom)} />
-          <Item label="OLD SHOULDER-LINE (debug)" value={deg(f?.oldShoulderLineDeg)} />
+          <Item label="TRIAL" value={snapshot ? `${snapshot.direction.toUpperCase()} ROTATION` : "—"} />
+          <Item label="ABSOLUTE SHOULDER YAW" value={deg(f?.absoluteShoulderYawDeg)} />
+          <Item label="BASELINE SHOULDER YAW" value={deg(f?.baselineShoulderYawDeg)} />
+          <Item label="SHOULDER YAW CHANGE" value={deg(f?.shoulderYawChangeDeg)} />
+          <Item label="ABSOLUTE HIP YAW" value={deg(f?.absoluteHipYawDeg)} />
+          <Item label="BASELINE HIP YAW" value={deg(f?.baselineHipYawDeg)} />
+          <Item label="HIP YAW CHANGE" value={deg(f?.hipYawChangeDeg)} />
+          <Item label="SIGNED TL ROTATION" value={deg(f?.signedTlRotationDeg)} />
+          <Item label="CURRENT RAW ROM" value={deg(snapshot?.rawRom)} />
+          <Item label="RAW MAX ROM" value={deg(snapshot?.maxRawRom)} />
           <Item label="READY BASELINE CAPTURED" value={yesNo(f?.readyBaselineCaptured)} />
-          <Item label="WORLD LANDMARKS" value="YES (primary source)" />
+          <Item label="WORLD LANDMARKS" value="YES" />
+          <Item label="EXPERIMENTAL OLD METHOD (shoulder→hipMid)" value={deg(f?.experimentalOldPrimaryDeg)} />
         </dl>
         <h3>Landmarks (world)</h3>
         <dl className="readout">
-          <Item label="Left shoulder xyz" value={xyz(f?.leftShoulder)} />
-          <Item label="Left shoulder confidence" value={num(f?.leftShoulderConfidence)} />
-          <Item label="Right shoulder xyz" value={xyz(f?.rightShoulder)} />
-          <Item label="Right shoulder confidence" value={num(f?.rightShoulderConfidence)} />
-          <Item label="Left hip xyz" value={xyz(f?.leftHip)} />
-          <Item label="Right hip xyz" value={xyz(f?.rightHip)} />
-          <Item label="Baseline primary vector XZ" value={v3(f?.neutralShoulderVector)} />
-          <Item label="Current primary vector XZ" value={v3(f?.currentShoulderVector)} />
+          <Item label="LEFT SHOULDER x/y/z" value={xyz(f?.leftShoulder)} />
+          <Item label="RIGHT SHOULDER x/y/z" value={xyz(f?.rightShoulder)} />
+          <Item label="LEFT HIP x/y/z" value={xyz(f?.leftHip)} />
+          <Item label="RIGHT HIP x/y/z" value={xyz(f?.rightHip)} />
         </dl>
       </div>
     </section>
@@ -70,19 +61,10 @@ function Item({ label, value }: { label: string; value: string }) {
 function deg(value: number | null | undefined): string {
   return value == null ? "—" : `${value.toFixed(2)}°`;
 }
-function num(value: number | null | undefined): string {
-  return value == null ? "—" : value.toFixed(3);
-}
-function pct(value: number | null | undefined): string {
-  return value == null ? "—" : `${Math.round(value * 100)}%`;
-}
 function yesNo(value: boolean | undefined): string {
   if (value == null) return "—";
   return value ? "YES" : "NO";
 }
 function xyz(point: { x: number; y: number; z: number } | null | undefined): string {
   return point ? `${point.x.toFixed(3)}, ${point.y.toFixed(3)}, ${point.z.toFixed(3)}` : "—";
-}
-function v3(point: { x: number; y: number; z: number } | null | undefined): string {
-  return xyz(point);
 }
