@@ -462,3 +462,50 @@ button.primary { background: #d7e6f5; color: #102033; }
   .below-grid, .readout, .stats { grid-template-columns: 1fr; }
   header { height: auto; min-height: 52px; flex-wrap: wrap; padding: 0.4rem 0.7rem; }
 }
+
+/* Lab chooser + oblique experiment chrome (does not alter frontal assessment layout). */
+.chooser {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 3rem 1.25rem 4rem;
+}
+.chooser h1 { margin: 0.2rem 0 0.6rem; font-size: 2rem; }
+.chooser .lede { color: #9aabbd; max-width: 46rem; line-height: 1.45; }
+.chooser-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 1.5rem 0 1rem;
+}
+.chooser-card {
+  text-align: left;
+  padding: 1.1rem 1.15rem 1.25rem;
+  border-radius: 12px;
+  background: #121820;
+  border: 1px solid #2a3645;
+  display: grid;
+  gap: 0.35rem;
+}
+.chooser-card.experimental { border-color: #3d6f9c; }
+.chooser-card strong { font-size: 1.05rem; }
+.chooser-card p { margin: 0; color: #9aabbd; font-size: 0.9rem; line-height: 1.35; }
+.chooser-kicker {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #7eb6ff;
+}
+.lab-chip {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid #1c2633;
+  font-size: 0.85rem;
+  color: #9aabbd;
+}
+.eyebrow { margin: 0; color: #7eb6ff; font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.warn { color: #e6b325; }
+@media (max-width: 700px) {
+  .chooser-grid { grid-template-columns: 1fr; }
+}
