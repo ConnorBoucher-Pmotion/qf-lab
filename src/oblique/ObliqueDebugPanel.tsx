@@ -15,16 +15,22 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
         Developer / debug {open ? "▴" : "▾"}
       </button>
       <div className="debug-body" hidden={!open}>
-        <p className="provisional">Experimental 45° oblique pipeline. Primary result = RAW MAX shoulder XZ yaw vs sealed neutral. Thoracic kept for comparison. Not clinically validated.</p>
+        <p className="provisional">
+          Experimental 45° oblique pipeline. Primary RAW MAX = upper-body Kabsch yaw (shoulders+elbows) minus pelvis yaw, from MediaPipe world landmarks. Old shoulder-line kept for plateau diagnosis. No physiological clamp. Not clinically validated.
+        </p>
         <h3>ROM pipeline</h3>
         <dl className="readout">
           <Item label="Camera Mode" value={snapshot ? cameraModeLabel(snapshot.cameraMode) : "—"} />
           <Item label="State" value={snapshot?.state ?? "—"} />
           <Item label="Direction" value={snapshot ? snapshot.direction.toUpperCase() : "—"} />
-          <Item label="CURRENT RAW ROM" value={deg(snapshot?.rawRom)} />
+          <Item label="OLD SHOULDER-LINE ANGLE" value={deg(f?.oldShoulderLineDeg)} />
+          <Item label="UPPER TORSO YAW (frame)" value={deg(f?.upperTorsoYawDeg)} />
+          <Item label="PELVIS YAW" value={deg(f?.pelvisRotationDeg)} />
+          <Item label="THORACIC (torso−pelvis frame)" value={deg(f?.thoracicRotationDeg)} />
+          <Item label="MULTI-LANDMARK TORSO YAW" value={deg(f?.multiLandmarkYawDeg)} />
+          <Item label="CURRENT RAW TL ROM" value={deg(snapshot?.rawRom)} />
+          <Item label="FILTERED CURRENT ROM" value={deg(snapshot?.filteredRom)} />
           <Item label="RAW MAX ROM (result)" value={deg(snapshot?.maxRawRom)} />
-          <Item label="FILTERED ROM" value={deg(snapshot?.filteredRom)} />
-          <Item label="MAX VALIDATED (debug)" value={deg(snapshot?.maxValidRom)} />
           <Item label="Baseline sealed" value={yesNo(f?.baselineSealed)} />
           <Item label="Frame valid" value={f?.frameValid.toUpperCase() ?? "—"} />
           <Item label="Reject reason" value={f?.rejectReason || "—"} />
@@ -32,8 +38,6 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
           <Item label="Occlusion mode" value={f?.occlusionMode ?? "—"} />
           <Item label="Occlusion active" value={yesNo(f?.occlusionActive)} />
           <Item label="Reliable shoulder" value={f?.reliableShoulder?.toUpperCase() ?? "—"} />
-          <Item label="Left reconstructed" value={yesNo(f?.leftReconstructed)} />
-          <Item label="Right reconstructed" value={yesNo(f?.rightReconstructed)} />
         </dl>
         <h3>Landmarks (world)</h3>
         <dl className="readout">
@@ -49,11 +53,6 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
           <Item label="Current shoulder vector" value={v3(f?.currentShoulderVector)} />
           <Item label="Neutral hip vector" value={v3(f?.neutralHipVector)} />
           <Item label="Current hip vector" value={v3(f?.currentHipVector)} />
-          <Item label="Live shoulder yaw" value={deg(f?.liveShoulderYawDeg)} />
-          <Item label="Neutral shoulder yaw (sealed)" value={deg(f?.neutralShoulderYawDeg)} />
-          <Item label="RAW SHOULDER ROTATION" value={deg(f?.shoulderRotationDeg)} />
-          <Item label="PELVIS ROTATION" value={deg(f?.pelvisRotationDeg)} />
-          <Item label="THORACIC ROTATION" value={deg(f?.thoracicRotationDeg)} />
         </dl>
         <h3>Comparison log</h3>
         <dl className="readout">

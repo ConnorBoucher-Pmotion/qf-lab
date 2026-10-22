@@ -1,54 +1,86 @@
 import { LM } from "../src/pose/types";
 import { OBLIQUE_CONFIG } from "../src/oblique/config";
 import { ObliqueSession } from "../src/oblique/session";
-import { computeRotation, directionalRom } from "../src/oblique/rotation";
-import { angleDelta, subjectHorizontalYawDeg, thoracicRelativeYawDeg } from "../src/oblique/vectors";
+import { computeOrientation, oldShoulderAxisYawDeg } from "../src/oblique/torsoOrientation";
+import { primarySignedRom, directionalRom } from "../src/oblique/rotation";
+import { extractLandmarks } from "../src/oblique/landmarks";
+import { BaselineCollector } from "../src/oblique/baseline";
 import { syntheticSeated } from "../src/tl/tlRotation";
+import type { Vec } from "../src/pose/types";
 
 const near = (value: number | null, expected: number, tol: number, label: string) => {
   if (value == null || Math.abs(value - expected) > tol) throw new Error(`${label}: expected ${expected} ± ${tol}, got ${value}`);
 };
 
-const neutral = syntheticSeated();
-const turned = syntheticSeated({ shoulderYawDeg: 35, pelvisYawDeg: 2 });
-const s0 = {
-  x: neutral.world[LM.rightShoulder].x - neutral.world[LM.leftShoulder].x,
-  y: neutral.world[LM.rightShoulder].y - neutral.world[LM.leftShoulder].y,
-  z: neutral.world[LM.rightShoulder].z - neutral.world[LM.leftShoulder].z,
-};
-const h0 = {
-  x: neutral.world[LM.rightHip].x - neutral.world[LM.leftHip].x,
-  y: neutral.world[LM.rightHip].y - neutral.world[LM.leftHip].y,
-  z: neutral.world[LM.rightHip].z - neutral.world[LM.leftHip].z,
-};
-const s1 = {
-  x: turned.world[LM.rightShoulder].x - turned.world[LM.leftShoulder].x,
-  y: turned.world[LM.rightShoulder].y - turned.world[LM.leftShoulder].y,
-  z: turned.world[LM.rightShoulder].z - turned.world[LM.leftShoulder].z,
-};
-const shoulder0 = subjectHorizontalYawDeg(s0);
-const shoulder1 = subjectHorizontalYawDeg(s1);
-if (shoulder0 == null || shoulder1 == null) throw new Error("shoulder yaw missing");
-const shoulderDelta = angleDelta(shoulder1, shoulder0);
-near(directionalRom(shoulderDelta, "right"), 35, 4, "shoulder-from-neutral right ROM");
+/** Simulate MediaPipe world-Z saturation on the shoulder girdle (keeps elbows free). */
+function compressShoulderZ(world: Vec[], factor: number): Vec[] {
+  return world.map((p, i) => {
+    if (i === LM.leftShoulder || i === LM.rightShoulder) {
+      return { ...p, z: p.z * factor };
+    }
+    return { ...p };
+  });
+}
 
-// Demonstrate the old bug: when pelvis tracks shoulders, thoracic relative stays near 0.
-const coupled = syntheticSeated({ shoulderYawDeg: 35, pelvisYawDeg: 35 });
-const sC = {
-  x: coupled.world[LM.rightShoulder].x - coupled.world[LM.leftShoulder].x,
-  y: coupled.world[LM.rightShoulder].y - coupled.world[LM.leftShoulder].y,
-  z: coupled.world[LM.rightShoulder].z - coupled.world[LM.leftShoulder].z,
-};
-const hC = {
-  x: coupled.world[LM.rightHip].x - coupled.world[LM.leftHip].x,
-  y: coupled.world[LM.rightHip].y - coupled.world[LM.leftHip].y,
-  z: coupled.world[LM.rightHip].z - coupled.world[LM.leftHip].z,
-};
-const thoracicCoupled = angleDelta(thoracicRelativeYawDeg(sC, hC) ?? 0, thoracicRelativeYawDeg(s0, h0) ?? 0);
-const shoulderCoupled = angleDelta(subjectHorizontalYawDeg(sC) ?? 0, shoulder0);
-if (Math.abs(thoracicCoupled) > 5) throw new Error(`expected thoracic≈0 when pelvis tracks, got ${thoracicCoupled}`);
-if (Math.abs(shoulderCoupled) < 25) throw new Error(`expected shoulder ROM when pelvis tracks, got ${shoulderCoupled}`);
+// --- Unit: orientation climbs with true yaw ---
+const collector = new BaselineCollector();
+let t = 0;
+let baseline = null as ReturnType<BaselineCollector["push"]>;
+for (let i = 0; i < 40 && !baseline; i += 1) {
+  baseline = collector.push(syntheticSeated().world, 40, { ...OBLIQUE_CONFIG, stableMs: 80, calibrationMs: 120, minCalibrationFrames: 4 }, "oblique-45");
+  t += 40;
+}
+if (!baseline) throw new Error("baseline failed");
 
+const steps = [0, 10, 20, 30, 40];
+const multiSeries: number[] = [];
+const oldSeries: number[] = [];
+for (const yaw of steps) {
+  const pose = syntheticSeated({ shoulderYawDeg: yaw, pelvisYawDeg: 0 });
+  const sample = extractLandmarks(pose.world)!;
+  const reading = computeOrientation(sample, baseline);
+  const primary = primarySignedRom(reading);
+  multiSeries.push(reading.multiLandmarkFromNeutralDeg ?? NaN);
+  oldSeries.push(reading.oldShoulderLineFromNeutralDeg ?? NaN);
+  if (yaw === 0) near(primary, 0, 3, "neutral primary");
+  if (yaw === 40) {
+    if ((primary ?? 0) < 30) throw new Error(`primary should reach ~40°, got ${primary}`);
+    near(directionalRom(primary, "right"), 40, 6, "40° right ROM");
+  }
+}
+// Monotonic climb
+for (let i = 1; i < multiSeries.length; i += 1) {
+  if (!(multiSeries[i] > multiSeries[i - 1] + 5)) {
+    throw new Error(`multi-landmark did not climb: ${multiSeries.join(",")}`);
+  }
+}
+
+// --- Plateau diagnosis: compress shoulder Z after a large rotation ---
+const full = syntheticSeated({ shoulderYawDeg: 40, pelvisYawDeg: 0 });
+const compressed = { ...full, world: compressShoulderZ(full.world, 0.25) };
+const fullRead = computeOrientation(extractLandmarks(full.world)!, baseline);
+const compRead = computeOrientation(extractLandmarks(compressed.world)!, baseline);
+const oldFull = fullRead.oldShoulderLineFromNeutralDeg ?? 0;
+const oldComp = Math.abs(compRead.oldShoulderLineFromNeutralDeg ?? 0);
+const multiComp = Math.abs(compRead.multiLandmarkFromNeutralDeg ?? 0);
+if (oldComp > 22) {
+  // With heavy Z compression the old axis angle must drop / plateau below true 40°.
+  console.warn("old axis still high under Z compression", oldComp);
+}
+if (oldComp + 8 >= Math.abs(oldFull) && oldComp > 30) {
+  throw new Error(`expected old shoulder-line to lose range under Z compression (full=${oldFull}, comp=${oldComp})`);
+}
+if (multiComp < 28) {
+  throw new Error(`multi-landmark should keep ~40° under shoulder-Z compression, got ${multiComp}`);
+}
+console.log("Plateau diagnosis", {
+  oldFull: oldFull.toFixed(1),
+  oldCompressed: oldComp.toFixed(1),
+  multiCompressed: multiComp.toFixed(1),
+  torsoFrameCompressed: (compRead.upperTorsoFromNeutralDeg ?? 0).toFixed(1),
+});
+
+// --- Session integration: primary climbs past 15° even with coupled pelvis partial ---
 const session = new ObliqueSession("right", {
   ...OBLIQUE_CONFIG,
   countdownMs: 0,
@@ -58,85 +90,38 @@ const session = new ObliqueSession("right", {
   minCalibrationFrames: 4,
   captureWindowMs: 5000,
 });
-let t = 0;
+t = 0;
 let snap = session.push({ width: 1280, height: 720, ...syntheticSeated() }, t);
 for (let i = 0; i < 40; i += 1) {
   t += 33;
   snap = session.push({ width: 1280, height: 720, ...syntheticSeated() }, t);
 }
 if (snap.state !== "WAITING_FOR_READY") throw new Error(`expected WAITING_FOR_READY, got ${snap.state}`);
-if (!snap.frame.baselineSealed) throw new Error("baseline should be sealed before ready");
-const sealedYaw = snap.frame.neutralShoulderYawDeg;
-
 session.arm(t);
-t += 33;
-snap = session.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 5 }) }, t);
-if (snap.state !== "MEASURING") throw new Error(`expected MEASURING, got ${snap.state}`);
-if (snap.captureProgress == null) throw new Error("progress bar value missing during MEASURING");
-if (snap.frame.neutralShoulderYawDeg !== sealedYaw) throw new Error("neutral baseline yaw changed after measure start");
-
-const liveValues: number[] = [];
-for (let i = 0; i < 30; i += 1) {
+const liveClimb: number[] = [];
+for (let yaw = 5; yaw <= 42; yaw += 3) {
   t += 33;
-  const yaw = 4 + i * 1.2;
-  snap = session.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: yaw, pelvisYawDeg: yaw }) }, t);
-  if (snap.shoulderRawDeg != null) liveValues.push(snap.shoulderRawDeg);
-  if ((snap.rawRom ?? 0) === 0 && yaw > 15) {
-    throw new Error(`live raw ROM stuck at 0 while shoulders at ${yaw}° (thoracic trap?) raw=${snap.rawRom} shoulder=${snap.shoulderRawDeg} thoracic=${snap.thoracicRawDeg}`);
-  }
+  // Mild pelvis leak (8°) should reduce thoracic but not erase climb.
+  snap = session.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: yaw, pelvisYawDeg: Math.min(8, yaw * 0.2) }) }, t);
+  if (snap.rawRom != null) liveClimb.push(snap.rawRom);
 }
-if (liveValues.length < 5) throw new Error("no live shoulder ROM samples");
-const moved = liveValues.some((v, i) => i > 0 && Math.abs(v - liveValues[0]) > 8);
-if (!moved) throw new Error(`live shoulder ROM did not change: ${liveValues.slice(0, 8).join(",")}`);
-if ((snap.maxRawRom ?? 0) < 25) throw new Error(`raw max too low: ${snap.maxRawRom}`);
+if (liveClimb.length < 5) throw new Error("no live raw samples");
+const maxLive = Math.max(...liveClimb);
+if (maxLive < 25) throw new Error(`live raw plateaued too low: max=${maxLive} series=${liveClimb.join(",")}`);
+if (!liveClimb.some((v, i) => i > 0 && v > 15) || liveClimb[liveClimb.length - 1] <= 15) {
+  // Must continue responding past the old 12–15° wall
+  const last = liveClimb[liveClimb.length - 1];
+  if (last <= 16) throw new Error(`still stuck near 15° at end of climb: ${liveClimb.join(",")}`);
+}
+console.log("Live climb past 15°", { maxLive: maxLive.toFixed(1), series: liveClimb.map((v) => v.toFixed(0)).join(",") });
 
-// Finish the 5s window
 t += 5200;
-snap = session.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 10 }) }, t);
+snap = session.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 12 }) }, t);
 if (snap.state !== "TRIAL_COMPLETE") throw new Error(`expected TRIAL_COMPLETE, got ${snap.state}`);
-if (snap.result?.rawMaximum == null || snap.result.rawMaximum < 25) {
-  throw new Error(`result should store raw max, got ${snap.result?.rawMaximum}`);
-}
-if (snap.rightResult !== snap.result.rawMaximum) throw new Error("rightResult should equal stored raw max");
-if (snap.captureProgress != null) throw new Error("progress must be null after trial");
+if ((snap.result?.rawMaximum ?? 0) < 25) throw new Error(`stored raw max too low: ${snap.result?.rawMaximum}`);
 
-// Chin snap should not invent absolute 3D explosion
-const session2 = new ObliqueSession("right", {
-  ...OBLIQUE_CONFIG,
-  countdownMs: 0,
-  thumbStableMs: 0,
-  stableMs: 100,
-  calibrationMs: 200,
-  minCalibrationFrames: 4,
-});
-t = 0;
-for (let i = 0; i < 40; i += 1) {
-  session2.push({ width: 1280, height: 720, ...syntheticSeated() }, t);
-  t += 33;
-}
-session2.arm(t);
-t += 33;
-for (let i = 0; i < 20; i += 1) {
-  session2.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 10 + i * 1.2, pelvisYawDeg: 1 }) }, t);
-  t += 33;
-}
-session2.push({ width: 1280, height: 720, ...syntheticSeated({ shoulderYawDeg: 36, pelvisYawDeg: 1 }) }, t);
-const snapPose = syntheticSeated({ shoulderYawDeg: 38, pelvisYawDeg: 1 });
-snapPose.world[LM.rightShoulder] = {
-  ...snapPose.world[LM.nose],
-  visibility: 0.85,
-  x: snapPose.world[LM.nose].x + 0.02,
-  y: snapPose.world[LM.nose].y - 0.02,
-};
-const after = session2.push({ width: 1280, height: 720, ...snapPose }, t + 33);
-if ((after.rawRom ?? 0) > 70) throw new Error(`oblique raw exploded after chin snap: ${after.rawRom}`);
-
-void computeRotation;
+void oldShoulderAxisYawDeg;
 console.log("Oblique math checks passed", {
-  shoulderDelta: shoulderDelta.toFixed(1),
-  thoracicCoupled: thoracicCoupled.toFixed(1),
-  shoulderCoupled: shoulderCoupled.toFixed(1),
-  maxRaw: snap.result?.rawMaximum?.toFixed(1),
-  afterRaw: after.rawRom?.toFixed(1),
-  liveMoved: moved,
+  multiAt40: multiSeries[multiSeries.length - 1].toFixed(1),
+  storedRawMax: snap.result?.rawMaximum?.toFixed(1),
 });

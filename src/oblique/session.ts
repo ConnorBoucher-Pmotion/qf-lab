@@ -4,7 +4,7 @@ import { measurementConfidence } from "./confidence";
 import { OBLIQUE_CONFIG, setupCameraCopy, type ObliqueConfig } from "./config";
 import { extractLandmarks, vis } from "./landmarks";
 import { OcclusionHandler } from "./occlusion";
-import { computeRotation, directionalRom } from "./rotation";
+import { computeRotation, directionalRom, primarySignedRom } from "./rotation";
 import { AngleSmoother, isSpike } from "./temporal";
 import { validateFrame } from "./validation";
 import { hipVector, shoulderVector } from "./vectors";
@@ -18,6 +18,7 @@ import type {
   ObliqueState,
   RotationDirection,
 } from "./types";
+import type { OrientationReading } from "./torsoOrientation";
 
 const EMPTY_FRAME: FrameDebug = {
   leftShoulder: null,
@@ -34,9 +35,12 @@ const EMPTY_FRAME: FrameDebug = {
   currentHipVector: null,
   liveShoulderYawDeg: null,
   neutralShoulderYawDeg: null,
-  shoulderRotationDeg: null,
+  oldShoulderLineDeg: null,
+  upperTorsoYawDeg: null,
   pelvisRotationDeg: null,
   thoracicRotationDeg: null,
+  multiLandmarkYawDeg: null,
+  shoulderRotationDeg: null,
   rawRom: null,
   filteredRom: null,
   maxRawRom: null,
@@ -99,8 +103,8 @@ export class ObliqueSession {
   private startedAt: number | null = null;
   private weakFor = 0;
   private logEvery = 0;
-  /** Frozen baseline shoulder yaw for assert-style debug (must match baseline.shoulderYawDeg). */
-  private sealedNeutralYaw: number | null = null;
+  /** Frozen baseline torso yaw — must not change mid-trial. */
+  private sealedTorsoYaw: number | null = null;
 
   constructor(direction: RotationDirection = "right", config: Partial<ObliqueConfig> = {}) {
     this.direction = direction;
@@ -150,7 +154,7 @@ export class ObliqueSession {
     this.occlusion.reset();
     this.smoother.reset();
     this.baseline = null;
-    this.sealedNeutralYaw = null;
+    this.sealedTorsoYaw = null;
     this.state = "SEARCHING";
     this.clearAttempt();
     this.lastT = null;
@@ -162,7 +166,7 @@ export class ObliqueSession {
     this.occlusion.reset();
     this.smoother.reset();
     this.baseline = null;
-    this.sealedNeutralYaw = null;
+    this.sealedTorsoYaw = null;
     this.clearAttempt();
     this.state = "ALIGNMENT";
   }
@@ -213,15 +217,13 @@ export class ObliqueSession {
       const built = this.collector.push(frame.world, dt, this.config, this.config.cameraMode);
       if (built) {
         this.baseline = built;
-        this.sealedNeutralYaw = built.shoulderYawDeg;
+        this.sealedTorsoYaw = built.torsoYawDeg;
         this.state = "WAITING_FOR_READY";
         this.note("Calibration complete", now);
       } else {
         this.state = this.collector.progress(this.config) > 0 ? "CALIBRATING" : "ALIGNMENT";
       }
-      const sVec = shoulderVector(rawSample);
-      const hVec = hipVector(rawSample);
-      const preview = computeRotation(sVec, hVec, this.baseline);
+      const preview = computeRotation(rawSample, this.baseline, frame.image);
       const frameDebug = this.debugFrame(
         rawSample,
         preview,
@@ -236,24 +238,23 @@ export class ObliqueSession {
       return this.snapshot(frame.image, now, frameDebug, null);
     }
 
-    // Guard: baseline must stay sealed
-    if (this.sealedNeutralYaw != null && this.baseline.shoulderYawDeg !== this.sealedNeutralYaw) {
-      console.error("[oblique] BASELINE RESET DETECTED — restoring sealed neutral yaw", {
-        sealed: this.sealedNeutralYaw,
-        current: this.baseline.shoulderYawDeg,
+    // Guard: baseline torso yaw must stay sealed
+    if (this.sealedTorsoYaw != null && this.baseline.torsoYawDeg !== this.sealedTorsoYaw) {
+      console.error("[oblique] BASELINE RESET DETECTED — restoring sealed torso yaw", {
+        sealed: this.sealedTorsoYaw,
+        current: this.baseline.torsoYawDeg,
       });
-      this.baseline = { ...this.baseline, shoulderYawDeg: this.sealedNeutralYaw };
+      this.baseline = { ...this.baseline, torsoYawDeg: this.sealedTorsoYaw };
     }
 
     const occ = this.occlusion.apply(rawSample, this.direction, this.baseline, this.config);
-    const sVec = shoulderVector(occ.sample);
-    const hVec = hipVector(occ.sample);
-    const reading = computeRotation(sVec, hVec, this.baseline);
+    // Occlusion may rewrite shoulders; recompute orientation from assisted sample + image for debug line.
+    const reading = computeRotation(occ.sample, this.baseline, frame.image);
 
-    // PRIMARY RAW = shoulder XZ yaw vs sealed neutral (NOT thoracic-vs-pelvis).
-    // Thoracic relative often stays ~0° when hips track the shoulders in world space.
-    const signedShoulder = reading.shoulderFromNeutralDeg;
-    const rawRom = directionalRom(signedShoulder, this.direction);
+    // PRIMARY RAW = upper-body Kabsch yaw − pelvis yaw change (world landmarks).
+    // Old shoulder-axis / torso-frame-from-shoulders alone plateaus when MediaPipe Z saturates.
+    const signedRom = primarySignedRom(reading);
+    const rawRom = directionalRom(signedRom, this.direction);
     const spike = this.movementStarted && rawRom != null && isSpike(this.lastRaw, rawRom, dt, this.config);
     const validation = validateFrame({
       sample: occ.sample,
@@ -272,7 +273,7 @@ export class ObliqueSession {
     if (validation.validity === "reject") this.invalidFrames += 1;
     if (occ.occlusionActive) this.occlusionEvents += 1;
     if (validation.reason === "Pelvis unstable") this.pelvisWarnFrames += 1;
-    if (validation.pelvisRotationDeg != null) this.maxPelvis = Math.max(this.maxPelvis, Math.abs(validation.pelvisRotationDeg));
+    if (reading.pelvisFromNeutralDeg != null) this.maxPelvis = Math.max(this.maxPelvis, Math.abs(reading.pelvisFromNeutralDeg));
     this.shoulderScoreSum += (vis(rawSample.leftShoulder) + vis(rawSample.rightShoulder)) / 2;
     this.hipScoreSum += (vis(rawSample.leftHip) + vis(rawSample.rightHip)) / 2;
     this.scoreN += 1;
@@ -289,8 +290,13 @@ export class ObliqueSession {
     if (this.logEvery % 12 === 0) {
       const ls = rawSample.leftShoulder;
       const rs = rawSample.rightShoulder;
+      const nls = this.baseline.leftShoulder;
+      const nrs = this.baseline.rightShoulder;
       console.log(
-        `[oblique] state=${this.state}\nLS: x:${ls.x.toFixed(3)} y:${ls.y.toFixed(3)} z:${ls.z.toFixed(3)} v:${(ls.visibility ?? 0).toFixed(2)}\nRS: x:${rs.x.toFixed(3)} y:${rs.y.toFixed(3)} z:${rs.z.toFixed(3)} v:${(rs.visibility ?? 0).toFixed(2)}\nneutralYaw:${this.sealedNeutralYaw?.toFixed(1)} liveYaw:${reading.liveShoulderYawDeg?.toFixed(1)} shoulderFromNeutral:${signedShoulder?.toFixed(1)} pelvis:${reading.pelvisFromNeutralDeg?.toFixed(1)} thoracic:${reading.thoracicFromNeutralDeg?.toFixed(1)} raw:${rawRom?.toFixed(1)} maxRaw:${this.rawPeak?.toFixed(1)}`
+        `[oblique] state=${this.state}\n` +
+          `neutral LS: ${nls.x.toFixed(3)},${nls.y.toFixed(3)},${nls.z.toFixed(3)}  RS: ${nrs.x.toFixed(3)},${nrs.y.toFixed(3)},${nrs.z.toFixed(3)}\n` +
+          `current LS: ${ls.x.toFixed(3)},${ls.y.toFixed(3)},${ls.z.toFixed(3)}  RS: ${rs.x.toFixed(3)},${rs.y.toFixed(3)},${rs.z.toFixed(3)}\n` +
+          `oldShoulderLine:${reading.oldShoulderLineFromNeutralDeg?.toFixed(1)} torsoFrame:${reading.upperTorsoFromNeutralDeg?.toFixed(1)} pelvis:${reading.pelvisFromNeutralDeg?.toFixed(1)} thoracicFrame:${reading.thoracicRomDeg?.toFixed(1)} multi:${reading.multiLandmarkFromNeutralDeg?.toFixed(1)} primaryRaw:${rawRom?.toFixed(1)} maxRaw:${this.rawPeak?.toFixed(1)}`
       );
     }
 
@@ -508,7 +514,7 @@ export class ObliqueSession {
 
   private debugFrame(
     sample: ReturnType<typeof extractLandmarks>,
-    reading: ReturnType<typeof computeRotation>,
+    reading: OrientationReading,
     mode: FrameDebug["occlusionMode"],
     occlusionActive: boolean,
     reliable: FrameDebug["reliableShoulder"],
@@ -518,6 +524,7 @@ export class ObliqueSession {
     reason: FrameDebug["rejectReason"]
   ): FrameDebug {
     if (!sample) return { ...EMPTY_FRAME, baselineSealed: this.baseline != null };
+    const primary = primarySignedRom(reading);
     return {
       leftShoulder: sample.leftShoulder,
       rightShoulder: sample.rightShoulder,
@@ -531,11 +538,14 @@ export class ObliqueSession {
       currentShoulderVector: shoulderVector(sample),
       neutralHipVector: this.baseline?.hipVector ?? null,
       currentHipVector: hipVector(sample),
-      liveShoulderYawDeg: reading.liveShoulderYawDeg,
-      neutralShoulderYawDeg: reading.neutralShoulderYawDeg ?? this.sealedNeutralYaw,
-      shoulderRotationDeg: reading.shoulderFromNeutralDeg,
+      liveShoulderYawDeg: reading.oldShoulderLineYawDeg,
+      neutralShoulderYawDeg: this.baseline?.shoulderYawDeg ?? null,
+      oldShoulderLineDeg: reading.oldShoulderLineFromNeutralDeg,
+      upperTorsoYawDeg: reading.upperTorsoFromNeutralDeg,
       pelvisRotationDeg: reading.pelvisFromNeutralDeg,
-      thoracicRotationDeg: reading.thoracicFromNeutralDeg,
+      thoracicRotationDeg: reading.thoracicRomDeg,
+      multiLandmarkYawDeg: reading.multiLandmarkFromNeutralDeg,
+      shoulderRotationDeg: primary,
       rawRom: null,
       filteredRom: null,
       maxRawRom: null,
@@ -580,7 +590,7 @@ export class ObliqueSession {
       movementStarted: this.movementStarted,
       movementValid: frame.frameValid === "valid",
       measurementConfidence: confidence,
-      shoulderRawDeg: frame.shoulderRotationDeg,
+      shoulderRawDeg: frame.oldShoulderLineDeg,
       pelvisRawDeg: frame.pelvisRotationDeg,
       thoracicRawDeg: frame.thoracicRotationDeg,
       rawRom: frame.rawRom,

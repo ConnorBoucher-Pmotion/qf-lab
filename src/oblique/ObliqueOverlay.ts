@@ -35,8 +35,8 @@ export function drawObliqueOverlay(ctx: CanvasRenderingContext2D, width: number,
   dot(ctx, mx(midSh.x), midSh.y, 4, "#fff");
   dot(ctx, mx(midHip.x), midHip.y, 4, "#fff");
 
-  // Always show live RAW shoulder-from-neutral when baseline exists (not only while measuring).
-  const angle = snapshot.shoulderRawDeg ?? snapshot.rawRom;
+  // Show primary RAW TL ROM (Kabsch−pelvis), not the old shoulder-line angle.
+  const angle = snapshot.rawRom ?? snapshot.frame.shoulderRotationDeg;
   if (angle != null && snapshot.baselineReady) {
     const label = `${angle.toFixed(1)}°`;
     ctx.font = "600 28px system-ui, sans-serif";

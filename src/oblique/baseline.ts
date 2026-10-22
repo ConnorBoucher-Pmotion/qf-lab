@@ -11,6 +11,7 @@ import {
   thoracicRelativeYawDeg,
   torsoCenterOf,
 } from "./vectors";
+import { buildPelvisFrame, buildTorsoFrame, oldShoulderAxisYawDeg } from "./torsoOrientation";
 import type { LandmarkSample, ObliqueBaseline, ObliqueCameraMode } from "./types";
 import type { Vec } from "../pose/types";
 
@@ -124,7 +125,9 @@ function seal(a: Acc, cameraMode: ObliqueCameraMode): ObliqueBaseline {
   const sVec = shoulderVector(sample);
   const hVec = hipVector(sample);
   const relative = thoracicRelativeYawDeg(sVec, hVec) ?? 0;
-  const shoulderYaw = subjectHorizontalYawDeg(sVec) ?? 0;
+  const torso = buildTorsoFrame(sample);
+  const pelvis = buildPelvisFrame(sample);
+  const shoulderYaw = oldShoulderAxisYawDeg(sample) ?? subjectHorizontalYawDeg(sVec) ?? 0;
   const pelvisYaw = subjectHorizontalYawDeg(hVec) ?? 0;
   return {
     cameraMode,
@@ -146,6 +149,8 @@ function seal(a: Acc, cameraMode: ObliqueCameraMode): ObliqueBaseline {
     relativeYawDeg: relative,
     shoulderYawDeg: shoulderYaw,
     pelvisYawDeg: pelvisYaw,
+    torsoYawDeg: torso?.yawDeg ?? shoulderYaw,
+    pelvisFrameYawDeg: pelvis?.yawDeg ?? pelvisYaw,
     shoulderWidth: shoulderWidthOf(sample),
     leftShoulderToEar: dist(a.leftShoulder, a.leftEar),
     rightShoulderToEar: dist(a.rightShoulder, a.rightEar),

@@ -181,16 +181,24 @@ export function ObliqueApp({ onBack }: Props) {
               <h2>Live angles</h2>
               <dl className="readout">
                 <div>
-                  <dt>Shoulder raw</dt>
+                  <dt>Old shoulder-line</dt>
                   <dd>{deg(snapshot?.shoulderRawDeg)}</dd>
+                </div>
+                <div>
+                  <dt>Torso frame</dt>
+                  <dd>{deg(snapshot?.frame?.upperTorsoYawDeg)}</dd>
                 </div>
                 <div>
                   <dt>Pelvis</dt>
                   <dd>{deg(snapshot?.pelvisRawDeg)}</dd>
                 </div>
                 <div>
-                  <dt>Thoracic</dt>
+                  <dt>Thoracic (frame)</dt>
                   <dd>{deg(snapshot?.thoracicRawDeg)}</dd>
+                </div>
+                <div>
+                  <dt>Multi-landmark</dt>
+                  <dd>{deg(snapshot?.frame?.multiLandmarkYawDeg)}</dd>
                 </div>
               </dl>
             </section>
@@ -226,22 +234,30 @@ function LiveDebugHud({ snapshot }: { snapshot: ObliqueSnapshot | null }) {
   const f = snapshot.frame;
   const ls = f.leftShoulder;
   const rs = f.rightShoulder;
+  const lh = f.leftHip;
+  const rh = f.rightHip;
   return (
     <div className="oblique-hud">
+      <div>CAMERA MODE: {snapshot.cameraMode === "oblique-45" ? "45° OBLIQUE" : snapshot.cameraMode.toUpperCase()}</div>
       <div>STATE: {snapshot.state}</div>
-      <div>
-        LS: {ls ? `${ls.x.toFixed(2)} / ${ls.y.toFixed(2)} / ${ls.z.toFixed(2)} / ${f.leftShoulderConfidence.toFixed(2)}` : "—"}
-      </div>
-      <div>
-        RS: {rs ? `${rs.x.toFixed(2)} / ${rs.y.toFixed(2)} / ${rs.z.toFixed(2)} / ${f.rightShoulderConfidence.toFixed(2)}` : "—"}
-      </div>
-      <div>CURRENT SHOULDER ANGLE: {deg(f.liveShoulderYawDeg)}</div>
-      <div>NEUTRAL SHOULDER ANGLE: {deg(f.neutralShoulderYawDeg)}</div>
-      <div>RAW ROTATION FROM BASELINE: {deg(f.shoulderRotationDeg)}</div>
-      <div>PELVIS ROTATION: {deg(f.pelvisRotationDeg)}</div>
-      <div>THORACIC ROTATION: {deg(f.thoracicRotationDeg)}</div>
-      <div>CURRENT RAW TL ROM: {deg(snapshot.rawRom)}</div>
+      <div>OLD SHOULDER-LINE ANGLE: {deg(f.oldShoulderLineDeg)}</div>
+      <div>UPPER TORSO YAW: {deg(f.upperTorsoYawDeg)}</div>
+      <div>PELVIS YAW: {deg(f.pelvisRotationDeg)}</div>
+      <div>RAW TL ROTATION: {deg(snapshot.rawRom)}</div>
+      <div>MULTI-LANDMARK TORSO YAW: {deg(f.multiLandmarkYawDeg)}</div>
       <div>RAW MAX ROM: {deg(snapshot.maxRawRom)}</div>
+      <div>
+        LS: {ls ? `${ls.x.toFixed(2)}/${ls.y.toFixed(2)}/${ls.z.toFixed(2)}` : "—"}
+      </div>
+      <div>
+        RS: {rs ? `${rs.x.toFixed(2)}/${rs.y.toFixed(2)}/${rs.z.toFixed(2)}` : "—"}
+      </div>
+      <div>
+        LH: {lh ? `${lh.x.toFixed(2)}/${lh.y.toFixed(2)}/${lh.z.toFixed(2)}` : "—"}
+      </div>
+      <div>
+        RH: {rh ? `${rh.x.toFixed(2)}/${rh.y.toFixed(2)}/${rh.z.toFixed(2)}` : "—"}
+      </div>
       <div>
         TIME REMAINING:{" "}
         {snapshot.state === "MEASURING" && snapshot.captureRemainingMs != null

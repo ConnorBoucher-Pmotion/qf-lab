@@ -62,8 +62,14 @@ export type ObliqueBaseline = {
   torsoCenter: V3;
   /** Horizontal signed shoulder-vs-pelvis angle at neutral (world landmarks). */
   relativeYawDeg: number;
+  /** Legacy shoulder-AXIS yaw at neutral (debug / plateau comparison). */
   shoulderYawDeg: number;
+  /** Legacy hip-AXIS yaw at neutral. */
   pelvisYawDeg: number;
+  /** Sealed torso-frame forward yaw at neutral (primary). */
+  torsoYawDeg: number;
+  /** Sealed pelvis-frame forward yaw at neutral. */
+  pelvisFrameYawDeg: number;
   shoulderWidth: number;
   leftShoulderToEar: number;
   rightShoulderToEar: number;
@@ -86,15 +92,23 @@ export type FrameDebug = {
   currentShoulderVector: V3 | null;
   neutralHipVector: V3 | null;
   currentHipVector: V3 | null;
-  /** Live absolute shoulder yaw (subject-right +). */
+  /** Legacy shoulder-AXIS absolute yaw. */
   liveShoulderYawDeg: number | null;
-  /** Sealed neutral shoulder yaw — must not change during a trial. */
+  /** Sealed neutral shoulder-AXIS yaw. */
   neutralShoulderYawDeg: number | null;
-  /** Signed shoulder yaw change from sealed neutral. */
-  shoulderRotationDeg: number | null;
+  /** OLD shoulder-line / axis change from neutral (debug — plateau-prone). */
+  oldShoulderLineDeg: number | null;
+  /** Upper torso frame yaw change from neutral. */
+  upperTorsoYawDeg: number | null;
+  /** Pelvis frame yaw change from neutral. */
   pelvisRotationDeg: number | null;
+  /** Thoracic = upperTorsoFromNeutral − pelvisFromNeutral. */
   thoracicRotationDeg: number | null;
-  /** Directional raw TL ROM (shoulder-from-neutral in trial direction). */
+  /** Kabsch multi-landmark upper-body yaw vs neutral. */
+  multiLandmarkYawDeg: number | null;
+  /** Alias kept for older HUD bindings: signed primary thoracic. */
+  shoulderRotationDeg: number | null;
+  /** Directional raw TL ROM (torso-vs-pelvis in trial direction). */
   rawRom: number | null;
   filteredRom: number | null;
   maxRawRom: number | null;
