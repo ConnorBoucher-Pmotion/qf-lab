@@ -26,6 +26,8 @@ export type ObliqueConfig = {
   occlusionHoldMs: number;
   trackingLostMs: number;
   angleEmaAlpha: number;
+  /** Pelvis yaw below this (degrees) is ignored when subtracting from primary ROM. */
+  pelvisDeadbandDeg: number;
 };
 
 export const OBLIQUE_CONFIG: ObliqueConfig = {
@@ -51,6 +53,7 @@ export const OBLIQUE_CONFIG: ObliqueConfig = {
   occlusionHoldMs: 700,
   trackingLostMs: 500,
   angleEmaAlpha: 0.35,
+  pelvisDeadbandDeg: 2.5,
 };
 
 export function cameraModeLabel(mode: ObliqueCameraMode): string {

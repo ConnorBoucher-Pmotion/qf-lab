@@ -54,7 +54,6 @@ export function ObliqueApp({ onBack }: Props) {
   }, [snapshot?.state]);
 
   useEffect(() => {
-    // Keep React direction toggle in sync when session auto-advances.
     if (snapshot?.direction && snapshot.direction !== direction && snapshot.state !== "MEASURING" && snapshot.state !== "COUNTDOWN") {
       setDirection(snapshot.direction);
     }
@@ -85,11 +84,7 @@ export function ObliqueApp({ onBack }: Props) {
             <button type="button" onClick={() => setNextSignal((n) => n + 1)}>
               Next trial
             </button>
-            <button
-              type="button"
-              disabled={snapshot?.state !== "TRIAL_COMPLETE"}
-              onClick={() => setSwitchSignal((n) => n + 1)}
-            >
+            <button type="button" disabled={snapshot?.state !== "TRIAL_COMPLETE"} onClick={() => setSwitchSignal((n) => n + 1)}>
               Next direction
             </button>
             <button type="button" onClick={() => setResetSignal((n) => n + 1)}>
@@ -134,9 +129,11 @@ export function ObliqueApp({ onBack }: Props) {
                 Mic: {mic} · {cameraModeLabel(config.cameraMode)} ·{" "}
                 {snapshot?.state === "MEASURING"
                   ? `Measuring · ${((snapshot.captureRemainingMs ?? 0) / 1000).toFixed(1)}s left`
-                  : snapshot?.baselineReady
-                    ? "Aligned — say Ready or hold a thumbs up"
-                    : `Calibrating neutral 0° · ${Math.round((snapshot?.calibrationProgress ?? 0) * 100)}%`}
+                  : snapshot?.frame.readyBaselineCaptured
+                    ? "Baseline = 0° · measuring primary shoulder arc"
+                    : snapshot?.baselineReady
+                      ? "Aligned — say Ready or hold a thumbs up (sets 0°)"
+                      : `Calibrating alignment · ${Math.round((snapshot?.calibrationProgress ?? 0) * 100)}%`}
               </p>
               {snapshot?.frame.rejectReason === "Pelvis unstable" ? <p className="blocked-by">Keep your hips facing forward.</p> : null}
               <div className="start-row">
@@ -159,7 +156,8 @@ export function ObliqueApp({ onBack }: Props) {
               <h2>RAW MAX ROM</h2>
               <p className="result-hero">{deg(snapshot?.maxRawRom ?? snapshot?.result?.rawMaximum)}</p>
               <p className="mic-note">
-                {snapshot?.direction === "left" ? "LEFT" : "RIGHT"} ROTATION
+                {snapshot?.direction === "left" ? "LEFT" : "RIGHT"} ROTATION · primary{" "}
+                {(snapshot?.frame.primaryLandmark ?? (direction === "right" ? "left" : "right")).toUpperCase()} shoulder
                 {snapshot?.state === "TRIAL_COMPLETE" || snapshot?.state === "SESSION_COMPLETE" ? " · TRIAL COMPLETE" : ""}
               </p>
               <dl className="readout">
@@ -178,27 +176,23 @@ export function ObliqueApp({ onBack }: Props) {
               </dl>
             </section>
             <section className="gate-box">
-              <h2>Live angles</h2>
+              <h2>Primary / comparison</h2>
               <dl className="readout">
                 <div>
-                  <dt>Old shoulder-line</dt>
-                  <dd>{deg(snapshot?.shoulderRawDeg)}</dd>
+                  <dt>Primary Δ</dt>
+                  <dd>{deg(snapshot?.frame.primaryChangeFromBaselineDeg)}</dd>
                 </div>
                 <div>
-                  <dt>Torso frame</dt>
-                  <dd>{deg(snapshot?.frame?.upperTorsoYawDeg)}</dd>
+                  <dt>Comparison Δ</dt>
+                  <dd>{deg(snapshot?.frame.comparisonChangeDeg)}</dd>
                 </div>
                 <div>
-                  <dt>Pelvis</dt>
+                  <dt>Pelvis Δ</dt>
                   <dd>{deg(snapshot?.pelvisRawDeg)}</dd>
                 </div>
                 <div>
-                  <dt>Thoracic (frame)</dt>
-                  <dd>{deg(snapshot?.thoracicRawDeg)}</dd>
-                </div>
-                <div>
-                  <dt>Multi-landmark</dt>
-                  <dd>{deg(snapshot?.frame?.multiLandmarkYawDeg)}</dd>
+                  <dt>Old shoulder-line</dt>
+                  <dd>{deg(snapshot?.frame.oldShoulderLineDeg)}</dd>
                 </div>
               </dl>
             </section>
@@ -234,18 +228,23 @@ function LiveDebugHud({ snapshot }: { snapshot: ObliqueSnapshot | null }) {
   const f = snapshot.frame;
   const ls = f.leftShoulder;
   const rs = f.rightShoulder;
-  const lh = f.leftHip;
-  const rh = f.rightHip;
   return (
     <div className="oblique-hud">
-      <div>CAMERA MODE: {snapshot.cameraMode === "oblique-45" ? "45° OBLIQUE" : snapshot.cameraMode.toUpperCase()}</div>
+      <div>TRIAL: {snapshot.direction.toUpperCase()} ROTATION</div>
       <div>STATE: {snapshot.state}</div>
-      <div>OLD SHOULDER-LINE ANGLE: {deg(f.oldShoulderLineDeg)}</div>
-      <div>UPPER TORSO YAW: {deg(f.upperTorsoYawDeg)}</div>
-      <div>PELVIS YAW: {deg(f.pelvisRotationDeg)}</div>
-      <div>RAW TL ROTATION: {deg(snapshot.rawRom)}</div>
-      <div>MULTI-LANDMARK TORSO YAW: {deg(f.multiLandmarkYawDeg)}</div>
-      <div>RAW MAX ROM: {deg(snapshot.maxRawRom)}</div>
+      <div>PRIMARY LANDMARK: {(f.primaryLandmark ?? "—").toUpperCase()} SHOULDER</div>
+      <div>PRIMARY CONFIDENCE: {Math.round(f.primaryConfidence * 100)}%</div>
+      <div>STARTING PRIMARY ANGLE: {deg(f.startingPrimaryAngleDeg)}</div>
+      <div>CURRENT PRIMARY ANGLE: {deg(f.currentPrimaryAngleDeg)}</div>
+      <div>PRIMARY CHANGE FROM BASELINE: {deg(f.primaryChangeFromBaselineDeg)}</div>
+      <div>
+        {f.comparisonLandmark?.toUpperCase() ?? "OPP"} SHOULDER COMPARISON: {deg(f.comparisonChangeDeg)}
+      </div>
+      <div>PELVIS ROTATION: {deg(f.pelvisRotationDeg)}</div>
+      <div>CURRENT RAW TL ROM: {deg(snapshot.rawRom)}</div>
+      <div>RAW MAX: {deg(snapshot.maxRawRom)}</div>
+      <div>OLD SHOULDER-LINE: {deg(f.oldShoulderLineDeg)}</div>
+      <div>BASELINE CAPTURED: {f.readyBaselineCaptured ? "YES" : "NO"}</div>
       <div>
         LS: {ls ? `${ls.x.toFixed(2)}/${ls.y.toFixed(2)}/${ls.z.toFixed(2)}` : "—"}
       </div>
@@ -253,18 +252,11 @@ function LiveDebugHud({ snapshot }: { snapshot: ObliqueSnapshot | null }) {
         RS: {rs ? `${rs.x.toFixed(2)}/${rs.y.toFixed(2)}/${rs.z.toFixed(2)}` : "—"}
       </div>
       <div>
-        LH: {lh ? `${lh.x.toFixed(2)}/${lh.y.toFixed(2)}/${lh.z.toFixed(2)}` : "—"}
-      </div>
-      <div>
-        RH: {rh ? `${rh.x.toFixed(2)}/${rh.y.toFixed(2)}/${rh.z.toFixed(2)}` : "—"}
-      </div>
-      <div>
         TIME REMAINING:{" "}
         {snapshot.state === "MEASURING" && snapshot.captureRemainingMs != null
           ? `${(snapshot.captureRemainingMs / 1000).toFixed(1)}s`
           : "—"}
       </div>
-      <div>BASELINE SEALED: {f.baselineSealed ? "YES" : "NO"}</div>
     </div>
   );
 }

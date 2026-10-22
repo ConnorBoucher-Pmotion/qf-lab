@@ -9,6 +9,9 @@ type Props = {
 
 export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
   const f = snapshot?.frame;
+  const trial = snapshot?.direction === "left" ? "LEFT ROTATION" : "RIGHT ROTATION";
+  const primary = (f?.primaryLandmark ?? "—").toUpperCase();
+  const comparison = (f?.comparisonLandmark ?? "—").toUpperCase();
   return (
     <section className="debug">
       <button type="button" className="debug-toggle" onClick={onToggle}>
@@ -16,28 +19,28 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
       </button>
       <div className="debug-body" hidden={!open}>
         <p className="provisional">
-          Experimental 45° oblique pipeline. Primary RAW MAX = upper-body Kabsch yaw (shoulders+elbows) minus pelvis yaw, from MediaPipe world landmarks. Old shoulder-line kept for plateau diagnosis. No physiological clamp. Not clinically validated.
+          45° experiment · side-specific primary shoulder arc around hip pivot (world XZ) · READY = hard 0° · comparison
+          shoulder never averaged into Raw Max · no physiological clamp.
         </p>
-        <h3>ROM pipeline</h3>
+        <h3>Trial</h3>
         <dl className="readout">
-          <Item label="Camera Mode" value={snapshot ? cameraModeLabel(snapshot.cameraMode) : "—"} />
-          <Item label="State" value={snapshot?.state ?? "—"} />
-          <Item label="Direction" value={snapshot ? snapshot.direction.toUpperCase() : "—"} />
-          <Item label="OLD SHOULDER-LINE ANGLE" value={deg(f?.oldShoulderLineDeg)} />
-          <Item label="UPPER TORSO YAW (frame)" value={deg(f?.upperTorsoYawDeg)} />
-          <Item label="PELVIS YAW" value={deg(f?.pelvisRotationDeg)} />
-          <Item label="THORACIC (torso−pelvis frame)" value={deg(f?.thoracicRotationDeg)} />
-          <Item label="MULTI-LANDMARK TORSO YAW" value={deg(f?.multiLandmarkYawDeg)} />
+          <Item label="CAMERA MODE" value={snapshot ? cameraModeLabel(snapshot.cameraMode).toUpperCase() : "—"} />
+          <Item label="STATE" value={snapshot?.state ?? "—"} />
+          <Item label="TRIAL" value={trial} />
+          <Item label="PRIMARY LANDMARK" value={`${primary} SHOULDER`} />
+          <Item label="PRIMARY CONFIDENCE" value={pct(f?.primaryConfidence)} />
+          <Item label="STARTING PRIMARY ANGLE" value={deg(f?.startingPrimaryAngleDeg)} />
+          <Item label="CURRENT PRIMARY ANGLE" value={deg(f?.currentPrimaryAngleDeg)} />
+          <Item label="PRIMARY CHANGE FROM BASELINE" value={deg(f?.primaryChangeFromBaselineDeg)} />
+          <Item label={`${comparison} SHOULDER COMPARISON`} value={deg(f?.comparisonChangeDeg)} />
+          <Item label="PELVIS ROTATION" value={deg(f?.pelvisRotationDeg)} />
+          <Item label="PELVIS SUBTRACT (deadband)" value={deg(f?.pelvisSubtractDeg)} />
           <Item label="CURRENT RAW TL ROM" value={deg(snapshot?.rawRom)} />
           <Item label="FILTERED CURRENT ROM" value={deg(snapshot?.filteredRom)} />
-          <Item label="RAW MAX ROM (result)" value={deg(snapshot?.maxRawRom)} />
-          <Item label="Baseline sealed" value={yesNo(f?.baselineSealed)} />
-          <Item label="Frame valid" value={f?.frameValid.toUpperCase() ?? "—"} />
-          <Item label="Reject reason" value={f?.rejectReason || "—"} />
-          <Item label="Measurement confidence" value={snapshot ? `${snapshot.measurementConfidence}%` : "—"} />
-          <Item label="Occlusion mode" value={f?.occlusionMode ?? "—"} />
-          <Item label="Occlusion active" value={yesNo(f?.occlusionActive)} />
-          <Item label="Reliable shoulder" value={f?.reliableShoulder?.toUpperCase() ?? "—"} />
+          <Item label="RAW MAX" value={deg(snapshot?.maxRawRom)} />
+          <Item label="OLD SHOULDER-LINE (debug)" value={deg(f?.oldShoulderLineDeg)} />
+          <Item label="READY BASELINE CAPTURED" value={yesNo(f?.readyBaselineCaptured)} />
+          <Item label="WORLD LANDMARKS" value="YES (primary source)" />
         </dl>
         <h3>Landmarks (world)</h3>
         <dl className="readout">
@@ -46,22 +49,9 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
           <Item label="Right shoulder xyz" value={xyz(f?.rightShoulder)} />
           <Item label="Right shoulder confidence" value={num(f?.rightShoulderConfidence)} />
           <Item label="Left hip xyz" value={xyz(f?.leftHip)} />
-          <Item label="Left hip confidence" value={num(f?.leftHipConfidence)} />
           <Item label="Right hip xyz" value={xyz(f?.rightHip)} />
-          <Item label="Right hip confidence" value={num(f?.rightHipConfidence)} />
-          <Item label="Neutral shoulder vector" value={v3(f?.neutralShoulderVector)} />
-          <Item label="Current shoulder vector" value={v3(f?.currentShoulderVector)} />
-          <Item label="Neutral hip vector" value={v3(f?.neutralHipVector)} />
-          <Item label="Current hip vector" value={v3(f?.currentHipVector)} />
-        </dl>
-        <h3>Comparison log</h3>
-        <dl className="readout">
-          <Item label="Left ROM" value={deg(snapshot?.comparison?.leftRom)} />
-          <Item label="Right ROM" value={deg(snapshot?.comparison?.rightRom)} />
-          <Item label="Invalid frame %" value={snapshot?.comparison ? `${snapshot.comparison.invalidFramePct}%` : "—"} />
-          <Item label="Occlusion events" value={snapshot?.comparison ? String(snapshot.comparison.shoulderOcclusionEvents) : "—"} />
-          <Item label="Max pelvis rotation" value={deg(snapshot?.comparison?.maxPelvisRotationDeg)} />
-          <Item label="Pose confidence" value={snapshot?.comparison ? `${snapshot.comparison.poseConfidence}%` : "—"} />
+          <Item label="Baseline primary vector XZ" value={v3(f?.neutralShoulderVector)} />
+          <Item label="Current primary vector XZ" value={v3(f?.currentShoulderVector)} />
         </dl>
       </div>
     </section>
@@ -82,6 +72,9 @@ function deg(value: number | null | undefined): string {
 }
 function num(value: number | null | undefined): string {
   return value == null ? "—" : value.toFixed(3);
+}
+function pct(value: number | null | undefined): string {
+  return value == null ? "—" : `${Math.round(value * 100)}%`;
 }
 function yesNo(value: boolean | undefined): string {
   if (value == null) return "—";

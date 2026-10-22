@@ -96,19 +96,19 @@ export type FrameDebug = {
   liveShoulderYawDeg: number | null;
   /** Sealed neutral shoulder-AXIS yaw. */
   neutralShoulderYawDeg: number | null;
-  /** OLD shoulder-line / axis change from neutral (debug — plateau-prone). */
+  /** OLD shoulder-line / axis change from READY (debug — plateau-prone). */
   oldShoulderLineDeg: number | null;
-  /** Upper torso frame yaw change from neutral. */
+  /** Upper torso frame yaw (legacy debug). */
   upperTorsoYawDeg: number | null;
-  /** Pelvis frame yaw change from neutral. */
+  /** Pelvis yaw change from READY. */
   pelvisRotationDeg: number | null;
-  /** Thoracic = upperTorsoFromNeutral − pelvisFromNeutral. */
+  /** Primary shoulder change from READY (trial-positive). */
   thoracicRotationDeg: number | null;
-  /** Kabsch multi-landmark upper-body yaw vs neutral. */
+  /** Comparison (opposite) shoulder change — validation only. */
   multiLandmarkYawDeg: number | null;
-  /** Alias kept for older HUD bindings: signed primary thoracic. */
+  /** Primary signed change (alias). */
   shoulderRotationDeg: number | null;
-  /** Directional raw TL ROM (torso-vs-pelvis in trial direction). */
+  /** Side-specific raw TL ROM (primary − pelvis deadband). */
   rawRom: number | null;
   filteredRom: number | null;
   maxRawRom: number | null;
@@ -120,8 +120,19 @@ export type FrameDebug = {
   occlusionActive: boolean;
   leftReconstructed: boolean;
   rightReconstructed: boolean;
-  /** True once per session after baseline is sealed; never rewritten mid-trial. */
+  /** True after READY seals the 0° baseline; never rewritten mid-trial. */
   baselineSealed: boolean;
+  /** Direction-specific primary landmark. */
+  primaryLandmark: ShoulderSide | null;
+  comparisonLandmark: ShoulderSide | null;
+  primaryConfidence: number;
+  comparisonConfidence: number;
+  startingPrimaryAngleDeg: number | null;
+  currentPrimaryAngleDeg: number | null;
+  primaryChangeFromBaselineDeg: number | null;
+  comparisonChangeDeg: number | null;
+  pelvisSubtractDeg: number;
+  readyBaselineCaptured: boolean;
 };
 
 export type ObliqueSnapshot = {
