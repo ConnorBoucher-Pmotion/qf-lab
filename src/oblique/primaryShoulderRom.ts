@@ -103,7 +103,8 @@ export function computePrimaryRom(
   const comparison = comparisonSide(direction);
   const primaryLm = primary === "left" ? sample.leftShoulder : sample.rightShoulder;
   const comparisonLm = comparison === "left" ? sample.leftShoulder : sample.rightShoulder;
-  const hipMid = mid(sample.leftHip, sample.rightHip);
+  // Prefer FROZEN hip mid from READY — live hips must not redefine zero.
+  const hipMid = ready && ready.direction === direction ? ready.hipMid : mid(sample.leftHip, sample.rightHip);
   const currentPrimary = sub3(primaryLm, hipMid);
   const currentComparison = sub3(comparisonLm, hipMid);
   const currentBearing = bearingDeg(currentPrimary);

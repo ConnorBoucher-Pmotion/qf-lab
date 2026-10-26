@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400">
+  <rect width="100%" height="100%" fill="#0f172a"/>
+  <text x="48" y="28" fill="#e2e8f0" font-size="14" font-family="sans-serif">Algo F · camera 35° · clear shoulders</text>
+  <line x1="48" y1="352" x2="592" y2="48" stroke="#94a3b8" stroke-dasharray="4"/>
+  <circle cx="48.0" cy="352.0" r="3.5" fill="#4c6ef5"/><circle cx="97.5" cy="324.4" r="3.5" fill="#4c6ef5"/><circle cx="146.9" cy="296.7" r="3.5" fill="#4c6ef5"/><circle cx="196.4" cy="269.1" r="3.5" fill="#4c6ef5"/><circle cx="245.8" cy="241.5" r="3.5" fill="#4c6ef5"/><circle cx="295.3" cy="213.8" r="3.5" fill="#4c6ef5"/><circle cx="344.7" cy="186.2" r="3.5" fill="#4c6ef5"/><circle cx="394.2" cy="158.5" r="3.5" fill="#4c6ef5"/><circle cx="443.6" cy="130.9" r="3.5" fill="#4c6ef5"/><circle cx="493.1" cy="103.3" r="3.5" fill="#4c6ef5"/><circle cx="542.5" cy="75.6" r="3.5" fill="#4c6ef5"/>
+  <text x="48" y="388" fill="#94a3b8" font-size="11">True |ROM| →</text>
+  <text x="12" y="48" fill="#94a3b8" font-size="11" transform="rotate(-90 12 48)">Predicted</text>
+</svg>

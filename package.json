@@ -8,6 +8,7 @@
     "dev:oblique": "vite --port 5192 --strictPort --open /?lab=oblique",
     "check": "tsx scripts/check-tl-math.ts",
     "check:oblique": "tsx scripts/check-oblique-math.ts",
+    "validate:tl": "tsx blender-validation/run_validation.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build"
   },

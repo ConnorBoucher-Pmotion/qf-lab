@@ -3,6 +3,20 @@ export type StoredRecording = {
   mimeType: string;
   durationMs: number;
   bytes: number;
+  /** Optional MediaRecorder diagnostics (TL oblique). */
+  recordingMeta?: {
+    source: string;
+    mimeType: string;
+    chunkCount: number;
+    blobBytes: number;
+    durationMs: number;
+    trackCount: number;
+    width: number | null;
+    height: number | null;
+    frameRate: number | null;
+    failed: boolean;
+    failReason: string | null;
+  };
 };
 
 const DB_NAME = "tl-lab";

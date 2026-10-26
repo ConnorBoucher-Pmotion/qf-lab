@@ -26,12 +26,15 @@ export type ObliqueConfig = {
   occlusionHoldMs: number;
   trackingLostMs: number;
   angleEmaAlpha: number;
-  /** Pelvis yaw below this (degrees) is ignored when subtracting from primary ROM. */
+  /** Legacy unused for ROM (kept for config compatibility). */
   pelvisDeadbandDeg: number;
+  /** Live hip deviation from frozen READY axis that triggers a hips-forward warning. */
+  hipDeviationWarnDeg: number;
 };
 
 export const OBLIQUE_CONFIG: ObliqueConfig = {
-  cameraMode: "oblique-45",
+  /** Synthetic lab favors ~35–40° for near-shoulder visibility; 45° remains supported. */
+  cameraMode: "oblique-35",
   stableMs: 500,
   calibrationMs: 800,
   minCalibrationFrames: 10,
@@ -54,11 +57,14 @@ export const OBLIQUE_CONFIG: ObliqueConfig = {
   trackingLostMs: 500,
   angleEmaAlpha: 0.35,
   pelvisDeadbandDeg: 2.5,
+  hipDeviationWarnDeg: 8,
 };
 
 export function cameraModeLabel(mode: ObliqueCameraMode): string {
   if (mode === "front") return "Front";
   if (mode === "oblique-30") return "30° Oblique";
+  if (mode === "oblique-35") return "35° Oblique";
+  if (mode === "oblique-40") return "40° Oblique";
   return "45° Oblique";
 }
 
@@ -66,6 +72,13 @@ export function setupCameraCopy(mode: ObliqueCameraMode): string {
   if (mode === "front") {
     return "Position the camera directly in front. Keep your head, shoulders, hips, and upper body visible.";
   }
-  const deg = mode === "oblique-30" ? "30°" : "45°";
+  const deg =
+    mode === "oblique-30"
+      ? "30°"
+      : mode === "oblique-35"
+        ? "35°"
+        : mode === "oblique-40"
+          ? "40°"
+          : "45°";
   return `Position the camera approximately ${deg} to your body. Make sure your head, shoulders, hips, and upper body remain visible throughout the movement.`;
 }

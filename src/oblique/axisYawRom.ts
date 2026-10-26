@@ -3,58 +3,96 @@ import type { LandmarkSample, RotationDirection, V3 } from "./types";
 import { computePrimaryRom, type ReadyBaseline as OldReadyBaseline } from "./primaryShoulderRom";
 
 /**
- * MediaPipe Pose world landmarks in this project:
+ * MediaPipe Pose world landmarks:
  *   x → subject right
- *   y → down (gravity); synthetic tests use Y-up — axis yaw uses XZ only
+ *   y → down (synthetic tests use Y-up; we only use XZ)
  *   z → toward camera
  *
- * Thorax / pelvis orientation = horizontal yaw of (right − left) axes.
- * ALWAYS right − left (never flipped).
+ * PRIMARY ROM (45° experiment):
+ *   TL = signedAngle(FROZEN hipAxis, current shoulderAxis)
+ *      − signedAngle(FROZEN hipAxis, baseline shoulderAxis)
+ *
+ * The hip axis is captured once at READY and NEVER updated.
+ * Live hip landmarks do NOT enter the ROM formula.
  */
+
+export type XZ = { x: number; z: number };
 
 export type AxisYawReadyBaseline = {
   direction: RotationDirection;
-  /** Absolute atan2(dz, dx) shoulder-axis yaw at READY. */
-  baselineShoulderYawDeg: number;
-  /** Absolute atan2(dz, dx) hip-axis yaw at READY. */
-  baselineHipYawDeg: number;
+  /** Frozen hip endpoints at READY (world). Never mutated after seal. */
+  baselineLeftHip: V3;
+  baselineRightHip: V3;
+  /** Frozen hip axis = right − left at READY. */
+  frozenHipAxis: XZ;
+  /** Shoulder endpoints at READY. */
+  baselineLeftShoulder: V3;
+  baselineRightShoulder: V3;
+  frozenShoulderAxis: XZ;
+  /**
+   * Absolute bearing of frozen hip axis (debug label only).
+   * Subject-right-positive convention.
+   */
+  frozenHipReferenceDeg: number;
+  /** Absolute bearing of starting shoulder axis. */
+  startingShoulderAngleDeg: number;
+  /** signedAngle(frozenHip, baselineShoulder) — zeroed out of ROM. */
+  startingShoulderToHipOffsetDeg: number;
   sealedAtMs: number;
-  /** Seed for continuous unwrapping (same as baseline at seal). */
-  unwrappedShoulderYawDeg: number;
-  unwrappedHipYawDeg: number;
-  lastRawShoulderYawDeg: number;
-  lastRawHipYawDeg: number;
 };
 
 export type AxisYawReading = {
-  absoluteShoulderYawDeg: number | null;
-  baselineShoulderYawDeg: number | null;
-  shoulderYawChangeDeg: number | null;
-  absoluteHipYawDeg: number | null;
-  baselineHipYawDeg: number | null;
-  hipYawChangeDeg: number | null;
-  /** Signed TL = shoulderYawChange − hipYawChange (continuous unwrapped). */
+  frozenHipReferenceDeg: number | null;
+  startingShoulderAngleDeg: number | null;
+  startingShoulderToHipOffsetDeg: number | null;
+  currentShoulderAngleDeg: number | null;
+  currentShoulderVsFrozenHipDeg: number | null;
+  /** TL ROM from start (signed, subject-right +). */
   signedTlRotationDeg: number | null;
-  /** Magnitude in the trial direction (for Raw / Raw Max). */
+  /** Magnitude in trial direction. */
   currentRawRomDeg: number | null;
+  liveHipAngleDeg: number | null;
+  /** Live hip vs frozen hip — quality only, NOT subtracted from ROM. */
+  liveHipDeviationDeg: number | null;
   usingWorldLandmarks: true;
-  /** Experimental old method (shoulder→hipMid arc) for comparison only. */
   experimentalOldPrimaryDeg: number | null;
   leftShoulderConfidence: number;
   rightShoulderConfidence: number;
+  /** Endpoints for drawing the frozen hip reference line (world → project in overlay). */
+  frozenLeftHip: V3 | null;
+  frozenRightHip: V3 | null;
 };
 
-/** Horizontal yaw of an axis vector built as right − left. Degrees. */
+/** Horizontal yaw of an axis (right − left). Subject-right-positive. */
 export function axisYawDeg(right: V3, left: V3): number | null {
   const dx = right.x - left.x;
   const dz = right.z - left.z;
   if (Math.hypot(dx, dz) < 1e-6) return null;
-  // Subject-right-positive: negate atan2(dz, dx) so a rightward trunk turn increases yaw
-  // (verified against syntheticSeated + MediaPipe X=right / Z=toward-camera).
   return (-Math.atan2(dz, dx) * 180) / Math.PI;
 }
 
-/** Shortest signed delta from `from` → `to` in degrees (−180, 180]. */
+export function xzAxis(right: V3, left: V3): XZ | null {
+  const x = right.x - left.x;
+  const z = right.z - left.z;
+  if (Math.hypot(x, z) < 1e-6) return null;
+  return { x, z };
+}
+
+/**
+ * Signed angle from axis A → axis B in the XZ plane (degrees).
+ * atan2(cross, dot) — NOT unsigned acos.
+ */
+export function signedAngleXZ(a: XZ, b: XZ): number | null {
+  const aMag = Math.hypot(a.x, a.z);
+  const bMag = Math.hypot(b.x, b.z);
+  if (aMag < 1e-6 || bMag < 1e-6) return null;
+  const dot = a.x * b.x + a.z * b.z;
+  const cross = a.x * b.z - a.z * b.x;
+  // Negate so subject-right shoulder turn relative to hip reads positive
+  // (MediaPipe X=right, Z=toward camera; verified with syntheticSeated).
+  return (-Math.atan2(cross, dot) * 180) / Math.PI;
+}
+
 export function shortestAngleDeltaDeg(from: number, to: number): number {
   let d = to - from;
   while (d > 180) d -= 360;
@@ -62,110 +100,138 @@ export function shortestAngleDeltaDeg(from: number, to: number): number {
   return d;
 }
 
-/**
- * Advance a continuously unwrapped angle given the new raw atan2 reading.
- * Prevents 15° → 0° collapse from re-wrapping / unsigned folding.
- */
-export function unwrapAngleDeg(previousUnwrapped: number, previousRaw: number, currentRaw: number): number {
-  return previousUnwrapped + shortestAngleDeltaDeg(previousRaw, currentRaw);
-}
-
 export function sealAxisYawBaseline(
   sample: LandmarkSample,
   direction: RotationDirection,
   now: number
 ): AxisYawReadyBaseline | null {
-  const shoulder = axisYawDeg(sample.rightShoulder, sample.leftShoulder);
-  const hip = axisYawDeg(sample.rightHip, sample.leftHip);
-  if (shoulder == null || hip == null) return null;
+  const frozenHipAxis = xzAxis(sample.rightHip, sample.leftHip);
+  const frozenShoulderAxis = xzAxis(sample.rightShoulder, sample.leftShoulder);
+  if (!frozenHipAxis || !frozenShoulderAxis) return null;
+
+  const startingOffset = signedAngleXZ(frozenHipAxis, frozenShoulderAxis);
+  if (startingOffset == null) return null;
+
+  const frozenHipReferenceDeg = axisYawDeg(sample.rightHip, sample.leftHip);
+  const startingShoulderAngleDeg = axisYawDeg(sample.rightShoulder, sample.leftShoulder);
+  if (frozenHipReferenceDeg == null || startingShoulderAngleDeg == null) return null;
+
   return {
     direction,
-    baselineShoulderYawDeg: shoulder,
-    baselineHipYawDeg: hip,
+    baselineLeftHip: copyV3(sample.leftHip),
+    baselineRightHip: copyV3(sample.rightHip),
+    frozenHipAxis: { ...frozenHipAxis },
+    baselineLeftShoulder: copyV3(sample.leftShoulder),
+    baselineRightShoulder: copyV3(sample.rightShoulder),
+    frozenShoulderAxis: { ...frozenShoulderAxis },
+    frozenHipReferenceDeg,
+    startingShoulderAngleDeg,
+    startingShoulderToHipOffsetDeg: startingOffset,
     sealedAtMs: now,
-    unwrappedShoulderYawDeg: shoulder,
-    unwrappedHipYawDeg: hip,
-    lastRawShoulderYawDeg: shoulder,
-    lastRawHipYawDeg: hip,
   };
 }
 
 /**
- * Update continuous unwrap state on the baseline object (mutates unwrap fields only).
- * Baseline absolute yaw values are NEVER overwritten.
+ * Primary ROM against FROZEN hip axis.
+ * Live hip landmarks are measured only as liveHipDeviationDeg (quality).
  */
-export function advanceUnwrap(baseline: AxisYawReadyBaseline, sample: LandmarkSample): void {
-  const shoulderRaw = axisYawDeg(sample.rightShoulder, sample.leftShoulder);
-  const hipRaw = axisYawDeg(sample.rightHip, sample.leftHip);
-  if (shoulderRaw == null || hipRaw == null) return;
-  baseline.unwrappedShoulderYawDeg = unwrapAngleDeg(
-    baseline.unwrappedShoulderYawDeg,
-    baseline.lastRawShoulderYawDeg,
-    shoulderRaw
-  );
-  baseline.unwrappedHipYawDeg = unwrapAngleDeg(
-    baseline.unwrappedHipYawDeg,
-    baseline.lastRawHipYawDeg,
-    hipRaw
-  );
-  baseline.lastRawShoulderYawDeg = shoulderRaw;
-  baseline.lastRawHipYawDeg = hipRaw;
-}
-
 export function computeAxisYawRom(
   sample: LandmarkSample,
   baseline: AxisYawReadyBaseline | null,
   direction: RotationDirection,
   oldReady: OldReadyBaseline | null
 ): AxisYawReading {
-  const shoulderRaw = axisYawDeg(sample.rightShoulder, sample.leftShoulder);
-  const hipRaw = axisYawDeg(sample.rightHip, sample.leftHip);
+  const currentShoulderAxis = xzAxis(sample.rightShoulder, sample.leftShoulder);
+  const currentHipAxis = xzAxis(sample.rightHip, sample.leftHip);
+  const currentShoulderAngle = axisYawDeg(sample.rightShoulder, sample.leftShoulder);
+  const liveHipAngle = axisYawDeg(sample.rightHip, sample.leftHip);
 
   let experimentalOld: number | null = null;
   if (oldReady) {
-    const old = computePrimaryRom(sample, oldReady, direction, 2.5);
-    experimentalOld = old.primaryChangeDeg;
+    experimentalOld = computePrimaryRom(sample, oldReady, direction, 2.5).primaryChangeDeg;
   }
 
-  if (!baseline || baseline.direction !== direction) {
+  if (!baseline || baseline.direction !== direction || !currentShoulderAxis) {
     return {
-      absoluteShoulderYawDeg: shoulderRaw,
-      baselineShoulderYawDeg: null,
-      shoulderYawChangeDeg: null,
-      absoluteHipYawDeg: hipRaw,
-      baselineHipYawDeg: null,
-      hipYawChangeDeg: null,
+      frozenHipReferenceDeg: baseline?.frozenHipReferenceDeg ?? null,
+      startingShoulderAngleDeg: baseline?.startingShoulderAngleDeg ?? null,
+      startingShoulderToHipOffsetDeg: baseline?.startingShoulderToHipOffsetDeg ?? null,
+      currentShoulderAngleDeg: currentShoulderAngle,
+      currentShoulderVsFrozenHipDeg: null,
       signedTlRotationDeg: null,
       currentRawRomDeg: null,
+      liveHipAngleDeg: liveHipAngle,
+      liveHipDeviationDeg: null,
       usingWorldLandmarks: true,
       experimentalOldPrimaryDeg: experimentalOld,
       leftShoulderConfidence: vis(sample.leftShoulder),
       rightShoulderConfidence: vis(sample.rightShoulder),
+      frozenLeftHip: baseline?.baselineLeftHip ?? null,
+      frozenRightHip: baseline?.baselineRightHip ?? null,
     };
   }
 
-  advanceUnwrap(baseline, sample);
+  // CRITICAL: always compare against baseline.frozenHipAxis — never rebuild from live hips.
+  const currentRelative = signedAngleXZ(baseline.frozenHipAxis, currentShoulderAxis);
+  if (currentRelative == null) {
+    return emptyWithBaseline(baseline, currentShoulderAngle, liveHipAngle, experimentalOld, sample, currentHipAxis);
+  }
 
-  const shoulderChange = baseline.unwrappedShoulderYawDeg - baseline.baselineShoulderYawDeg;
-  const hipChange = baseline.unwrappedHipYawDeg - baseline.baselineHipYawDeg;
-  const signedTl = shoulderChange - hipChange;
+  // Zero out the READY camera/setup offset.
+  const signedTl = currentRelative - baseline.startingShoulderToHipOffsetDeg;
+  const currentRaw = direction === "right" ? Math.max(0, signedTl) : Math.max(0, -signedTl);
 
-  // Trial-direction magnitude for Raw Max (sign preserved in signedTl).
-  const currentRaw =
-    direction === "right" ? Math.max(0, signedTl) : Math.max(0, -signedTl);
+  // Quality only — NOT subtracted from ROM.
+  const liveHipDeviation =
+    currentHipAxis == null ? null : signedAngleXZ(baseline.frozenHipAxis, currentHipAxis);
 
   return {
-    absoluteShoulderYawDeg: shoulderRaw,
-    baselineShoulderYawDeg: baseline.baselineShoulderYawDeg,
-    shoulderYawChangeDeg: shoulderChange,
-    absoluteHipYawDeg: hipRaw,
-    baselineHipYawDeg: baseline.baselineHipYawDeg,
-    hipYawChangeDeg: hipChange,
+    frozenHipReferenceDeg: baseline.frozenHipReferenceDeg,
+    startingShoulderAngleDeg: baseline.startingShoulderAngleDeg,
+    startingShoulderToHipOffsetDeg: baseline.startingShoulderToHipOffsetDeg,
+    currentShoulderAngleDeg: currentShoulderAngle,
+    currentShoulderVsFrozenHipDeg: currentRelative,
     signedTlRotationDeg: signedTl,
     currentRawRomDeg: currentRaw,
+    liveHipAngleDeg: liveHipAngle,
+    liveHipDeviationDeg: liveHipDeviation,
     usingWorldLandmarks: true,
     experimentalOldPrimaryDeg: experimentalOld,
     leftShoulderConfidence: vis(sample.leftShoulder),
     rightShoulderConfidence: vis(sample.rightShoulder),
+    frozenLeftHip: baseline.baselineLeftHip,
+    frozenRightHip: baseline.baselineRightHip,
   };
+}
+
+function emptyWithBaseline(
+  baseline: AxisYawReadyBaseline,
+  currentShoulderAngle: number | null,
+  liveHipAngle: number | null,
+  experimentalOld: number | null,
+  sample: LandmarkSample,
+  currentHipAxis: XZ | null
+): AxisYawReading {
+  return {
+    frozenHipReferenceDeg: baseline.frozenHipReferenceDeg,
+    startingShoulderAngleDeg: baseline.startingShoulderAngleDeg,
+    startingShoulderToHipOffsetDeg: baseline.startingShoulderToHipOffsetDeg,
+    currentShoulderAngleDeg: currentShoulderAngle,
+    currentShoulderVsFrozenHipDeg: null,
+    signedTlRotationDeg: null,
+    currentRawRomDeg: null,
+    liveHipAngleDeg: liveHipAngle,
+    liveHipDeviationDeg:
+      currentHipAxis == null ? null : signedAngleXZ(baseline.frozenHipAxis, currentHipAxis),
+    usingWorldLandmarks: true,
+    experimentalOldPrimaryDeg: experimentalOld,
+    leftShoulderConfidence: vis(sample.leftShoulder),
+    rightShoulderConfidence: vis(sample.rightShoulder),
+    frozenLeftHip: baseline.baselineLeftHip,
+    frozenRightHip: baseline.baselineRightHip,
+  };
+}
+
+function copyV3(p: { x: number; y: number; z: number }): V3 {
+  return { x: p.x, y: p.y, z: p.z };
 }

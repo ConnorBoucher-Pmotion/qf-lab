@@ -111,7 +111,7 @@ export function validateFrame(input: {
   };
 }
 
-function detectChinSnap(sample: LandmarkSample, baseline: ObliqueBaseline | null, config: ObliqueConfig): ShoulderSide | null {
+export function detectChinSnap(sample: LandmarkSample, baseline: ObliqueBaseline | null, config: ObliqueConfig): ShoulderSide | null {
   if (!baseline) return null;
   const check = (side: ShoulderSide): boolean => {
     const shoulder = side === "left" ? sample.leftShoulder : sample.rightShoulder;

@@ -2,13 +2,14 @@ import { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { ObliqueApp } from "./oblique/ObliqueApp";
+import { TrialReview } from "./oblique/TrialReview";
 import "./styles.css";
 
-type LabId = "chooser" | "frontal" | "oblique";
+type LabId = "chooser" | "frontal" | "oblique" | "oblique-review";
 
 function readLab(): LabId {
   const param = new URLSearchParams(window.location.search).get("lab");
-  if (param === "frontal" || param === "oblique" || param === "chooser") return param;
+  if (param === "frontal" || param === "oblique" || param === "oblique-review" || param === "chooser") return param;
   return "chooser";
 }
 
@@ -27,8 +28,18 @@ function LabRoot() {
     setLabUrl(next);
     setLab(next);
     document.title =
-      next === "oblique" ? "TL Junction – 45° Camera Test" : next === "frontal" ? "TL Junction Lab" : "TL Junction Labs";
+      next === "oblique"
+        ? "TL Junction – Oblique Camera Test"
+        : next === "oblique-review"
+          ? "TL Junction – Trial Review"
+          : next === "frontal"
+            ? "TL Junction Lab"
+            : "TL Junction Labs";
   };
+
+  if (lab === "oblique-review") {
+    return <TrialReview onBack={() => go("chooser")} />;
+  }
 
   if (lab === "frontal") {
     return (
@@ -45,14 +56,14 @@ function LabRoot() {
   }
 
   if (lab === "oblique") {
-    return <ObliqueApp onBack={() => go("chooser")} />;
+    return <ObliqueApp onBack={() => go("chooser")} onOpenReview={() => go("oblique-review")} />;
   }
 
   return (
     <div className="chooser">
       <p className="eyebrow">Local comparison</p>
       <h1>TL Junction Labs</h1>
-      <p className="lede">Keep the frontal assessment intact. Open the 45° experiment separately to compare shoulder occlusion and ROM stability.</p>
+      <p className="lede">Keep the frontal assessment intact. Open the oblique experiment separately to compare shoulder occlusion and hybrid ROM stability.</p>
       <div className="chooser-grid">
         <button type="button" className="chooser-card" onClick={() => go("frontal")}>
           <span className="chooser-kicker">Production</span>
@@ -61,11 +72,18 @@ function LabRoot() {
         </button>
         <button type="button" className="chooser-card experimental" onClick={() => go("oblique")}>
           <span className="chooser-kicker">Experimental</span>
-          <strong>TL Junction – 45° Camera Test</strong>
-          <p>Oblique camera · world-landmark thoracic ROM vs calibrated neutral · raw + validated.</p>
+          <strong>TL Junction – Oblique Camera Test</strong>
+          <p>Oblique camera · hybrid raw-max ROM · trial video + review.</p>
+        </button>
+        <button type="button" className="chooser-card" onClick={() => go("oblique-review")}>
+          <span className="chooser-kicker">Developer</span>
+          <strong>TL Trial Review</strong>
+          <p>Inspect saved videos, raw/filtered ROM graphs, confidence, and frame samples.</p>
         </button>
       </div>
-      <p className="muted small">Tip: bookmark <code>?lab=oblique</code> or <code>?lab=frontal</code> for direct entry.</p>
+      <p className="muted small">
+        Tip: bookmark <code>?lab=oblique</code>, <code>?lab=oblique-review</code>, or <code>?lab=frontal</code>.
+      </p>
     </div>
   );
 }

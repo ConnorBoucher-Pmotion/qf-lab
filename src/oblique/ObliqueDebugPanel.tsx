@@ -12,37 +12,58 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
   return (
     <section className="debug">
       <button type="button" className="debug-toggle" onClick={onToggle}>
-        Developer / debug {open ? "▴" : "▾"}
+        Developer / CV debug {open ? "▴" : "▾"}
       </button>
       <div className="debug-body" hidden={!open}>
         <p className="provisional">
-          Primary ROM = unwrapped shoulder-axis yaw change − hip-axis yaw change vs READY (world landmarks). Camera
-          angle is irrelevant. No physiological clamp. Old shoulder→hipMid arc kept as experimental comparison only.
+          Multi-estimator TL ROM. World landmarks drive hybrid when they report motion; image primary-orbit is selected
+          when world under-reports axial yaw. 2D shoulder-line slope is diagnostic only (often ~0 for pure yaw). CSS
+          mirror is display-only and never enters geometry.
         </p>
-        <h3>Thorax vs pelvis</h3>
+        <h3>RAW CV DEBUG</h3>
+        <dl className="readout">
+          <Item label="CURRENT ROM" value={deg(f?.rawRom)} />
+          <Item label="PEAK ROM" value={deg(snapshot?.maxRawRom)} />
+          <Item label="BASELINE" value={f?.baselineLocked ? "LOCKED" : f?.readyBaselineCaptured ? "captured" : "open"} />
+          <Item label="A EXISTING HYBRID" value={deg(f?.estimatorExistingDeg)} />
+          <Item label="B 2D SHOULDER-LINE" value={deg(f?.estimator2dLineDeg)} />
+          <Item label="C WORLD YAW" value={deg(f?.estimatorWorldYawDeg)} />
+          <Item label="D IMAGE PRIMARY ORBIT" value={deg(f?.estimatorImageOrbitDeg)} />
+          <Item label="SIGNED WORLD (UNCLAMPED)" value={deg(f?.worldSignedUnclampedDeg)} />
+          <Item label="SELECTED SOURCE" value={f?.estimatorSelectedSource ?? "—"} />
+          <Item label="TRUSTED SHOULDER" value={String(f?.reliableShoulder ?? "—").toUpperCase()} />
+          <Item label="HYBRID MODE" value={f?.hybridMode ?? "—"} />
+          <Item label="OCCLUSION" value={yesNo(f?.occlusionActive)} />
+          <Item label="LEFT SHOULDER CONF" value={pct(f?.leftShoulderConfidence)} />
+          <Item label="RIGHT SHOULDER CONF" value={pct(f?.rightShoulderConfidence)} />
+        </dl>
+        <h3>Frozen hip / baseline</h3>
         <dl className="readout">
           <Item label="CAMERA MODE" value={snapshot ? cameraModeLabel(snapshot.cameraMode).toUpperCase() : "—"} />
           <Item label="STATE" value={snapshot?.state ?? "—"} />
           <Item label="TRIAL" value={snapshot ? `${snapshot.direction.toUpperCase()} ROTATION` : "—"} />
-          <Item label="ABSOLUTE SHOULDER YAW" value={deg(f?.absoluteShoulderYawDeg)} />
-          <Item label="BASELINE SHOULDER YAW" value={deg(f?.baselineShoulderYawDeg)} />
-          <Item label="SHOULDER YAW CHANGE" value={deg(f?.shoulderYawChangeDeg)} />
-          <Item label="ABSOLUTE HIP YAW" value={deg(f?.absoluteHipYawDeg)} />
-          <Item label="BASELINE HIP YAW" value={deg(f?.baselineHipYawDeg)} />
-          <Item label="HIP YAW CHANGE" value={deg(f?.hipYawChangeDeg)} />
-          <Item label="SIGNED TL ROTATION" value={deg(f?.signedTlRotationDeg)} />
-          <Item label="CURRENT RAW ROM" value={deg(snapshot?.rawRom)} />
-          <Item label="RAW MAX ROM" value={deg(snapshot?.maxRawRom)} />
-          <Item label="READY BASELINE CAPTURED" value={yesNo(f?.readyBaselineCaptured)} />
-          <Item label="WORLD LANDMARKS" value="YES" />
-          <Item label="EXPERIMENTAL OLD METHOD (shoulder→hipMid)" value={deg(f?.experimentalOldPrimaryDeg)} />
+          <Item label="FROZEN HIP REFERENCE" value={deg(f?.frozenHipReferenceDeg)} />
+          <Item label="STARTING SHOULDER ANGLE" value={deg(f?.startingShoulderAngleDeg)} />
+          <Item label="STARTING OFFSET" value={deg(f?.startingShoulderToHipOffsetDeg)} />
+          <Item label="CURRENT SHOULDER VS FROZEN HIP" value={deg(f?.currentShoulderVsFrozenHipDeg)} />
+          <Item label="LIVE HIP DEVIATION (QUALITY)" value={deg(f?.liveHipDeviationDeg)} />
+          <Item label="WORLD LANDMARKS AVAILABLE" value="YES (MediaPipe Pose world)" />
         </dl>
-        <h3>Landmarks (world)</h3>
+        <h3>Image landmarks (pixels, unmirrored)</h3>
         <dl className="readout">
-          <Item label="LEFT SHOULDER x/y/z" value={xyz(f?.leftShoulder)} />
-          <Item label="RIGHT SHOULDER x/y/z" value={xyz(f?.rightShoulder)} />
-          <Item label="LEFT HIP x/y/z" value={xyz(f?.leftHip)} />
-          <Item label="RIGHT HIP x/y/z" value={xyz(f?.rightHip)} />
+          <Item label="LEFT SHOULDER x/y" value={xy(f?.imageLeftShoulder)} />
+          <Item label="RIGHT SHOULDER x/y" value={xy(f?.imageRightShoulder)} />
+          <Item label="LEFT HIP x/y" value={xy(f?.imageLeftHip)} />
+          <Item label="RIGHT HIP x/y" value={xy(f?.imageRightHip)} />
+        </dl>
+        <h3>World landmarks (meters)</h3>
+        <dl className="readout">
+          <Item label="LEFT SHOULDER x/y/z" value={xyz(f?.worldLeftShoulder ?? f?.leftShoulder)} />
+          <Item label="RIGHT SHOULDER x/y/z" value={xyz(f?.worldRightShoulder ?? f?.rightShoulder)} />
+          <Item label="LEFT HIP x/y/z" value={xyz(f?.worldLeftHip ?? f?.leftHip)} />
+          <Item label="RIGHT HIP x/y/z" value={xyz(f?.worldRightHip ?? f?.rightHip)} />
+          <Item label="FROZEN LEFT HIP" value={xyz(f?.frozenLeftHip)} />
+          <Item label="FROZEN RIGHT HIP" value={xyz(f?.frozenRightHip)} />
         </dl>
       </div>
     </section>
@@ -61,10 +82,16 @@ function Item({ label, value }: { label: string; value: string }) {
 function deg(value: number | null | undefined): string {
   return value == null ? "—" : `${value.toFixed(2)}°`;
 }
+function pct(value: number | null | undefined): string {
+  return value == null ? "—" : `${Math.round(value * 100)}%`;
+}
 function yesNo(value: boolean | undefined): string {
   if (value == null) return "—";
   return value ? "YES" : "NO";
 }
 function xyz(point: { x: number; y: number; z: number } | null | undefined): string {
   return point ? `${point.x.toFixed(3)}, ${point.y.toFixed(3)}, ${point.z.toFixed(3)}` : "—";
+}
+function xy(point: { x: number; y: number } | null | undefined): string {
+  return point ? `${point.x.toFixed(1)}, ${point.y.toFixed(1)}` : "—";
 }

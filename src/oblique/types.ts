@@ -1,6 +1,6 @@
 import type { Vec } from "../pose/types";
 
-export type ObliqueCameraMode = "front" | "oblique-45" | "oblique-30";
+export type ObliqueCameraMode = "front" | "oblique-45" | "oblique-40" | "oblique-35" | "oblique-30";
 export type RotationDirection = "left" | "right";
 export type ShoulderSide = "left" | "right";
 
@@ -112,6 +112,7 @@ export type FrameDebug = {
   rawRom: number | null;
   filteredRom: number | null;
   maxRawRom: number | null;
+  maxFilteredRom: number | null;
   maxValidRom: number | null;
   frameValid: FrameValidity;
   rejectReason: RejectReason;
@@ -143,6 +144,39 @@ export type FrameDebug = {
   signedTlRotationDeg: number | null;
   /** Experimental old: primary shoulder→hipMid arc (not used for Raw Max). */
   experimentalOldPrimaryDeg: number | null;
+  /** Frozen hip reference (READY) — must not change during trial. */
+  frozenHipReferenceDeg: number | null;
+  startingShoulderAngleDeg: number | null;
+  startingShoulderToHipOffsetDeg: number | null;
+  currentShoulderVsFrozenHipDeg: number | null;
+  liveHipDeviationDeg: number | null;
+  hipDeviationWarning: boolean;
+  /** World-space frozen hip endpoints for overlay (READY). */
+  frozenLeftHip: { x: number; y: number; z: number } | null;
+  frozenRightHip: { x: number; y: number; z: number } | null;
+  /** Image-pixel frozen hip line for overlay. */
+  frozenHipImage: { left: { x: number; y: number }; right: { x: number; y: number } } | null;
+  /** Hybrid estimator mode (B both-shoulder / C visible-shoulder). */
+  hybridMode: "BOTH_FROZEN_HIP" | "VISIBLE_SHOULDER" | "UNAVAILABLE" | null;
+  bothShoulderRomDeg: number | null;
+  visibleShoulderRomDeg: number | null;
+  rejectedOutlier: boolean;
+  /** Multi-estimator CV diagnostics */
+  estimatorExistingDeg: number | null;
+  estimator2dLineDeg: number | null;
+  estimatorWorldYawDeg: number | null;
+  estimatorImageOrbitDeg: number | null;
+  estimatorSelectedSource: string | null;
+  worldSignedUnclampedDeg: number | null;
+  baselineLocked: boolean;
+  imageLeftShoulder: { x: number; y: number; z: number } | null;
+  imageRightShoulder: { x: number; y: number; z: number } | null;
+  imageLeftHip: { x: number; y: number; z: number } | null;
+  imageRightHip: { x: number; y: number; z: number } | null;
+  worldLeftShoulder: { x: number; y: number; z: number } | null;
+  worldRightShoulder: { x: number; y: number; z: number } | null;
+  worldLeftHip: { x: number; y: number; z: number } | null;
+  worldRightHip: { x: number; y: number; z: number } | null;
 };
 
 export type ObliqueSnapshot = {
@@ -173,6 +207,7 @@ export type ObliqueSnapshot = {
   filteredRom: number | null;
   /** Running max of rawRom during MEASURING; frozen after TRIAL_COMPLETE. */
   maxRawRom: number | null;
+  maxFilteredRom: number | null;
   maxValidRom: number | null;
   leftResult: number | null;
   rightResult: number | null;
@@ -194,12 +229,14 @@ export type ObliqueResult = {
   direction: RotationDirection;
   accepted: boolean;
   rawMaximum: number | null;
+  filteredMaximum: number | null;
   validatedMaximum: number | null;
   measurementConfidence: number;
   invalidFramePct: number;
   occlusionEvents: number;
   maxPelvisRotationDeg: number | null;
   instruction: string;
+  trial?: import("./trialTypes").TlTrialRecord;
 };
 
 export type ComparisonRecord = {

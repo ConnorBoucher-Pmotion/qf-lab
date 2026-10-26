@@ -3,7 +3,9 @@ import { createTlPoseLandmarker, imageLandmarks, worldLandmarks, type PoseLandma
 import { createThumbRecognizer, isThumbUp, type GestureHandle } from "../pose/thumbsUp";
 import type { ObliqueConfig } from "./config";
 import { drawObliqueOverlay } from "./ObliqueOverlay";
+import { ObliqueCaptureRecorder, type RecordingMeta } from "./obliqueRecorder";
 import { ObliqueSession } from "./session";
+import { attachTrialVideo, saveTrial } from "./trialStore";
 import type { ObliqueSnapshot, RotationDirection } from "./types";
 
 type Props = {
@@ -15,15 +17,28 @@ type Props = {
   voiceSignal: number;
   switchSignal: number;
   onSnapshot: (snapshot: ObliqueSnapshot) => void;
+  onRecordingMeta?: (meta: RecordingMeta | null) => void;
 };
 
-export function ObliqueCameraView({ direction, config, resetSignal, nextSignal, startSignal, voiceSignal, switchSignal, onSnapshot }: Props) {
+export function ObliqueCameraView({
+  direction,
+  config,
+  resetSignal,
+  nextSignal,
+  startSignal,
+  voiceSignal,
+  switchSignal,
+  onSnapshot,
+  onRecordingMeta,
+}: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onSnapshotRef = useRef(onSnapshot);
+  const onRecordingMetaRef = useRef(onRecordingMeta);
   const configRef = useRef(config);
   const directionRef = useRef(direction);
   const sessionRef = useRef<ObliqueSession | null>(null);
   onSnapshotRef.current = onSnapshot;
+  onRecordingMetaRef.current = onRecordingMeta;
   configRef.current = config;
   directionRef.current = direction;
   const [status, setStatus] = useState("Starting camera…");
@@ -69,6 +84,9 @@ export function ObliqueCameraView({ direction, config, resetSignal, nextSignal, 
     let stream: MediaStream | null = null;
     let landmarker: PoseLandmarkerHandle | null = null;
     let gestures: GestureHandle | null = null;
+    let recorder: ObliqueCaptureRecorder | null = null;
+    let recording = false;
+    let finishingVideo = false;
 
     const video = document.createElement("video");
     video.className = "camera-feed";
@@ -78,9 +96,15 @@ export function ObliqueCameraView({ direction, config, resetSignal, nextSignal, 
     const canvas = document.createElement("canvas");
     host.replaceChildren(video, canvas);
     const ctx = canvas.getContext("2d");
+    // Record the LIVE camera MediaStream — never the overlay canvas (clearRect-only → black).
+    recorder = new ObliqueCaptureRecorder();
+
+    session.setTrialCompleteHandler((trial) => {
+      void saveTrial(trial);
+    });
 
     const publish = (snapshot: ObliqueSnapshot, now: number) => {
-      const rawKey = `${snapshot.rawRom?.toFixed(1)}|${snapshot.maxRawRom?.toFixed(1)}|${snapshot.shoulderRawDeg?.toFixed(1)}|${snapshot.captureProgress?.toFixed(2)}`;
+      const rawKey = `${snapshot.rawRom?.toFixed(1)}|${snapshot.maxRawRom?.toFixed(1)}|${snapshot.captureProgress?.toFixed(2)}`;
       if (snapshot.state !== lastState || rawKey !== lastRawKey || now - lastUi > 50) {
         lastState = snapshot.state;
         lastRawKey = rawKey;
@@ -118,6 +142,41 @@ export function ObliqueCameraView({ direction, config, resetSignal, nextSignal, 
         session.setConfig(configRef.current);
         const snapshot = session.push({ width, height, image: image ?? [], world: world ?? [], thumbUp }, now);
         drawObliqueOverlay(ctx, width, height, snapshot);
+
+        if (snapshot.state === "MEASURING" && !recording && recorder?.supported && stream) {
+          recording = true;
+          const meta = recorder.start(stream, `pending-${now}`);
+          onRecordingMetaRef.current?.(meta);
+        }
+        if (
+          (snapshot.state === "TRIAL_COMPLETE" || snapshot.state === "SESSION_COMPLETE") &&
+          recording &&
+          !finishingVideo &&
+          snapshot.result?.id
+        ) {
+          finishingVideo = true;
+          const trialId = snapshot.result.id;
+          void recorder?.stop(trialId).then(async (saved) => {
+            recording = false;
+            finishingVideo = false;
+            if (!saved) {
+              onRecordingMetaRef.current?.(recorder?.getLastMeta() ?? null);
+              return;
+            }
+            onRecordingMetaRef.current?.(saved.meta);
+            await attachTrialVideo(trialId, {
+              blob: saved.blob,
+              mimeType: saved.mimeType,
+              durationMs: saved.durationMs,
+              bytes: saved.blob.size,
+              recordingMeta: saved.meta,
+            });
+          });
+        }
+        if (snapshot.state !== "MEASURING" && snapshot.state !== "TRIAL_COMPLETE" && snapshot.state !== "SESSION_COMPLETE") {
+          recording = false;
+        }
+
         publish(snapshot, now);
       } catch {
         // A single bad frame should not kill the camera loop.
@@ -154,6 +213,7 @@ export function ObliqueCameraView({ direction, config, resetSignal, nextSignal, 
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      recorder?.dispose();
       landmarker?.close?.();
       gestures?.close?.();
       stream?.getTracks().forEach((track) => track.stop());
@@ -164,7 +224,11 @@ export function ObliqueCameraView({ direction, config, resetSignal, nextSignal, 
   return (
     <div className="stage-wrap">
       <div className="stage" ref={hostRef} />
-      {status ? <p className="stage-status">{status}</p> : <p className="stage-status stage-status-idle">Camera on · 45° experiment</p>}
+      {status ? (
+        <p className="stage-status">{status}</p>
+      ) : (
+        <p className="stage-status stage-status-idle">Camera on · multi-estimator CV · camera-stream record</p>
+      )}
     </div>
   );
 }

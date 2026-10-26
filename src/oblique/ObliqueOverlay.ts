@@ -19,7 +19,15 @@ export function drawObliqueOverlay(ctx: CanvasRenderingContext2D, width: number,
   const leftColor = snapshot.frame.leftReconstructed ? "#4da3ff" : leftConf >= 0.4 ? "#3ddc84" : "#e6b325";
   const rightColor = snapshot.frame.rightReconstructed ? "#4da3ff" : rightConf >= 0.4 ? "#3ddc84" : "#e6b325";
 
-  line(ctx, mx(hipL.x), hipL.y, mx(hipR.x), hipR.y, "rgba(215,230,245,0.9)", 4);
+  // Live hip (may jitter) — light
+  line(ctx, mx(hipL.x), hipL.y, mx(hipR.x), hipR.y, "rgba(215,230,245,0.55)", 3);
+  // Frozen hip reference from READY — must not move with live MediaPipe hips
+  const frozen = snapshot.frame.frozenHipImage;
+  if (frozen) {
+    dashedLine(ctx, mx(frozen.left.x), frozen.left.y, mx(frozen.right.x), frozen.right.y, "rgba(255,168,76,0.95)", 5);
+    ring(ctx, mx(frozen.left.x), frozen.left.y, 7, "#ffa84c");
+    ring(ctx, mx(frozen.right.x), frozen.right.y, 7, "#ffa84c");
+  }
   line(ctx, mx(shL.x), shL.y, mx(shR.x), shR.y, "rgba(126,182,255,0.95)", 5);
 
   const midSh = { x: (shL.x + shR.x) / 2, y: (shL.y + shR.y) / 2 };
@@ -35,9 +43,8 @@ export function drawObliqueOverlay(ctx: CanvasRenderingContext2D, width: number,
   dot(ctx, mx(midSh.x), midSh.y, 4, "#fff");
   dot(ctx, mx(midHip.x), midHip.y, 4, "#fff");
 
-  // Show primary RAW TL ROM (Kabsch−pelvis), not the old shoulder-line angle.
-  const angle = snapshot.rawRom ?? snapshot.frame.shoulderRotationDeg;
-  if (angle != null && snapshot.baselineReady) {
+  const angle = snapshot.rawRom ?? snapshot.frame.signedTlRotationDeg;
+  if (angle != null && snapshot.frame.readyBaselineCaptured) {
     const label = `${angle.toFixed(1)}°`;
     ctx.font = "600 28px system-ui, sans-serif";
     ctx.textAlign = "center";
@@ -68,7 +75,19 @@ function line(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number,
   ctx.beginPath();
   ctx.strokeStyle = color;
   ctx.lineWidth = width;
+  ctx.setLineDash([]);
   ctx.moveTo(x1, y1);
   ctx.lineTo(x2, y2);
   ctx.stroke();
+}
+
+function dashedLine(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, color: string, width: number): void {
+  ctx.beginPath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.setLineDash([10, 6]);
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.setLineDash([]);
 }
