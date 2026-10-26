@@ -2,6 +2,7 @@ import { OBLIQUE_CONFIG } from "../src/oblique/config";
 import { ObliqueSession } from "../src/oblique/session";
 import { computeAxisYawRom, sealAxisYawBaseline, signedAngleXZ } from "../src/oblique/axisYawRom";
 import { computeHybridRom, sealHybridBaseline } from "../src/oblique/hybridRom";
+import { computeAxialTrunkRom, sealAxialTrunkBaseline } from "../src/oblique/axialTrunkRom";
 import { extractLandmarks } from "../src/oblique/landmarks";
 import { syntheticSeated } from "../src/tl/tlRotation";
 import { LM } from "../src/pose/types";
@@ -177,6 +178,29 @@ console.log("Occlusion rescue", {
   // Force finish by shortening remaining window via config? call complete by waiting — use private finish via capture end.
   // Emulate capture end: push until captureEnds by reconstructing session with short window after arm.
   console.log("Acceptance raw-max persistence", { current: ps.rawRom?.toFixed(1), max: ps.maxRawRom?.toFixed(1) });
+}
+
+// Axial trunk model: 2D slope stays near 0 while world XZ yaw climbs.
+{
+  const axialReady = sealAxialTrunkBaseline(neutral, null, "right", 0)!;
+  const axialClimb: number[] = [];
+  for (const yaw of [0, 10, 20, 30, 40]) {
+    const sample = extractLandmarks(syntheticSeated({ shoulderYawDeg: yaw, pelvisYawDeg: 0 }).world)!;
+    const reading = computeAxialTrunkRom(sample, null, axialReady, {
+      minConfidence: 0.4,
+      softConfidence: 0.18,
+    });
+    axialClimb.push(reading.selectedRomDeg ?? NaN);
+    if (yaw === 0) near(reading.selectedRomDeg, 0, 0.5, "axial READY 0");
+    if (yaw === 40 && (reading.selectedRomDeg ?? 0) < 30) {
+      throw new Error(`axial trunk under-read at 40°: ${reading.selectedRomDeg}`);
+    }
+    // Absolute torso yaw change should track GT; 2D slope N/A without image.
+    if (reading.worldTorsoYawFromBaselineDeg != null) {
+      near(Math.abs(reading.worldTorsoYawFromBaselineDeg), yaw, 2, `axial torso Δ at ${yaw}`);
+    }
+  }
+  console.log("Axial trunk climb", axialClimb.map((v) => v.toFixed(0)).join(","));
 }
 
 void signedAngleXZ;

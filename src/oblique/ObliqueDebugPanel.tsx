@@ -12,49 +12,46 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
   return (
     <section className="debug">
       <button type="button" className="debug-toggle" onClick={onToggle}>
-        Developer / CV debug {open ? "▴" : "▾"}
+        Developer / axial trunk debug {open ? "▴" : "▾"}
       </button>
       <div className="debug-body" hidden={!open}>
         <p className="provisional">
-          Multi-estimator TL ROM. World landmarks drive hybrid when they report motion; image primary-orbit is selected
-          when world under-reports axial yaw. 2D shoulder-line slope is diagnostic only (often ~0 for pure yaw). CSS
-          mirror is display-only and never enters geometry.
+          Measuring calibrated axial trunk rotation relative to a locked pelvis (functional TL Junction ROM). 2D
+          shoulder-line slope is diagnostic only and never drives Raw Max. World landmarks (XZ yaw) are primary; depth
+          difference, foreshortening, and visible-shoulder orbit support occlusion.
         </p>
-        <h3>RAW CV DEBUG</h3>
+        <h3>Comparison (why old method failed)</h3>
         <dl className="readout">
-          <Item label="CURRENT ROM" value={deg(f?.rawRom)} />
-          <Item label="PEAK ROM" value={deg(snapshot?.maxRawRom)} />
-          <Item label="BASELINE" value={f?.baselineLocked ? "LOCKED" : f?.readyBaselineCaptured ? "captured" : "open"} />
-          <Item label="A EXISTING HYBRID" value={deg(f?.estimatorExistingDeg)} />
-          <Item label="B 2D SHOULDER-LINE" value={deg(f?.estimator2dLineDeg)} />
-          <Item label="C WORLD YAW" value={deg(f?.estimatorWorldYawDeg)} />
-          <Item label="D IMAGE PRIMARY ORBIT" value={deg(f?.estimatorImageOrbitDeg)} />
-          <Item label="SIGNED WORLD (UNCLAMPED)" value={deg(f?.worldSignedUnclampedDeg)} />
-          <Item label="SELECTED SOURCE" value={f?.estimatorSelectedSource ?? "—"} />
-          <Item label="TRUSTED SHOULDER" value={String(f?.reliableShoulder ?? "—").toUpperCase()} />
-          <Item label="HYBRID MODE" value={f?.hybridMode ?? "—"} />
-          <Item label="OCCLUSION" value={yesNo(f?.occlusionActive)} />
-          <Item label="LEFT SHOULDER CONF" value={pct(f?.leftShoulderConfidence)} />
-          <Item label="RIGHT SHOULDER CONF" value={pct(f?.rightShoulderConfidence)} />
+          <Item label="2D SHOULDER SLOPE (DIAG)" value={deg(f?.estimator2dLineDeg)} />
+          <Item label="3D TORSO YAW FROM BASELINE" value={deg(f?.torsoRotationFromBaselineDeg)} />
+          <Item label="PELVIS YAW FROM BASELINE" value={deg(f?.pelvisRotationFromBaselineDeg)} />
+          <Item label="TORSO RELATIVE PELVIS" value={deg(f?.torsoRelativePelvisDeg)} />
+          <Item label="SELECTED AXIAL ROM" value={deg(f?.rawRom)} />
+          <Item label="RAW MAX" value={deg(snapshot?.maxRawRom)} />
+          <Item label="SELECTED SOURCE" value={f?.axialSelectedSource ?? f?.estimatorSelectedSource ?? "—"} />
         </dl>
-        <h3>Frozen hip / baseline</h3>
+        <h3>Locked calibration</h3>
         <dl className="readout">
+          <Item label="BASELINE" value={f?.baselineLocked ? "LOCKED" : "open"} />
+          <Item label="BASELINE TORSO YAW" value={deg(f?.baselineTorsoYawDeg)} />
+          <Item label="CURRENT TORSO YAW" value={deg(f?.currentTorsoYawDeg)} />
+          <Item label="BASELINE PELVIS YAW" value={deg(f?.baselinePelvisYawDeg)} />
+          <Item label="CURRENT PELVIS YAW" value={deg(f?.currentPelvisYawDeg)} />
           <Item label="CAMERA MODE" value={snapshot ? cameraModeLabel(snapshot.cameraMode).toUpperCase() : "—"} />
           <Item label="STATE" value={snapshot?.state ?? "—"} />
           <Item label="TRIAL" value={snapshot ? `${snapshot.direction.toUpperCase()} ROTATION` : "—"} />
-          <Item label="FROZEN HIP REFERENCE" value={deg(f?.frozenHipReferenceDeg)} />
-          <Item label="STARTING SHOULDER ANGLE" value={deg(f?.startingShoulderAngleDeg)} />
-          <Item label="STARTING OFFSET" value={deg(f?.startingShoulderToHipOffsetDeg)} />
-          <Item label="CURRENT SHOULDER VS FROZEN HIP" value={deg(f?.currentShoulderVsFrozenHipDeg)} />
-          <Item label="LIVE HIP DEVIATION (QUALITY)" value={deg(f?.liveHipDeviationDeg)} />
-          <Item label="WORLD LANDMARKS AVAILABLE" value="YES (MediaPipe Pose world)" />
         </dl>
-        <h3>Image landmarks (pixels, unmirrored)</h3>
+        <h3>Supporting signals</h3>
         <dl className="readout">
-          <Item label="LEFT SHOULDER x/y" value={xy(f?.imageLeftShoulder)} />
-          <Item label="RIGHT SHOULDER x/y" value={xy(f?.imageRightShoulder)} />
-          <Item label="LEFT HIP x/y" value={xy(f?.imageLeftHip)} />
-          <Item label="RIGHT HIP x/y" value={xy(f?.imageRightHip)} />
+          <Item label="DEPTH DIFF YAW" value={deg(f?.depthDiffYawDeg)} />
+          <Item label="FORESHORTENING" value={deg(f?.foreshorteningDeg)} />
+          <Item label="VISIBLE SHOULDER ORBIT" value={deg(f?.visibleShoulderOrbitDeg)} />
+          <Item label="IMAGE PRIMARY ORBIT" value={deg(f?.estimatorImageOrbitDeg)} />
+          <Item label="OCCLUSION" value={f?.axialOcclusion ?? "—"} />
+          <Item label="TRUSTED SHOULDER" value={String(f?.reliableShoulder ?? "—").toUpperCase()} />
+          <Item label="LEFT SHOULDER CONF" value={pct(f?.leftShoulderConfidence)} />
+          <Item label="RIGHT SHOULDER CONF" value={pct(f?.rightShoulderConfidence)} />
+          <Item label="WORLD LANDMARKS" value="YES (MediaPipe Pose world, XZ yaw)" />
         </dl>
         <h3>World landmarks (meters)</h3>
         <dl className="readout">
@@ -62,8 +59,13 @@ export function ObliqueDebugPanel({ open, onToggle, snapshot }: Props) {
           <Item label="RIGHT SHOULDER x/y/z" value={xyz(f?.worldRightShoulder ?? f?.rightShoulder)} />
           <Item label="LEFT HIP x/y/z" value={xyz(f?.worldLeftHip ?? f?.leftHip)} />
           <Item label="RIGHT HIP x/y/z" value={xyz(f?.worldRightHip ?? f?.rightHip)} />
-          <Item label="FROZEN LEFT HIP" value={xyz(f?.frozenLeftHip)} />
-          <Item label="FROZEN RIGHT HIP" value={xyz(f?.frozenRightHip)} />
+        </dl>
+        <h3>Image landmarks (pixels, unmirrored)</h3>
+        <dl className="readout">
+          <Item label="LEFT SHOULDER x/y" value={xy(f?.imageLeftShoulder)} />
+          <Item label="RIGHT SHOULDER x/y" value={xy(f?.imageRightShoulder)} />
+          <Item label="LEFT HIP x/y" value={xy(f?.imageLeftHip)} />
+          <Item label="RIGHT HIP x/y" value={xy(f?.imageRightHip)} />
         </dl>
       </div>
     </section>
@@ -84,10 +86,6 @@ function deg(value: number | null | undefined): string {
 }
 function pct(value: number | null | undefined): string {
   return value == null ? "—" : `${Math.round(value * 100)}%`;
-}
-function yesNo(value: boolean | undefined): string {
-  if (value == null) return "—";
-  return value ? "YES" : "NO";
 }
 function xyz(point: { x: number; y: number; z: number } | null | undefined): string {
   return point ? `${point.x.toFixed(3)}, ${point.y.toFixed(3)}, ${point.z.toFixed(3)}` : "—";

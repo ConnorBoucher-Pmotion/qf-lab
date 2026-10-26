@@ -177,6 +177,19 @@ export type FrameDebug = {
   worldRightShoulder: { x: number; y: number; z: number } | null;
   worldLeftHip: { x: number; y: number; z: number } | null;
   worldRightHip: { x: number; y: number; z: number } | null;
+  /** Axial trunk model (primary ROM quantity). */
+  baselineTorsoYawDeg: number | null;
+  currentTorsoYawDeg: number | null;
+  torsoRotationFromBaselineDeg: number | null;
+  baselinePelvisYawDeg: number | null;
+  currentPelvisYawDeg: number | null;
+  pelvisRotationFromBaselineDeg: number | null;
+  torsoRelativePelvisDeg: number | null;
+  depthDiffYawDeg: number | null;
+  foreshorteningDeg: number | null;
+  visibleShoulderOrbitDeg: number | null;
+  axialSelectedSource: string | null;
+  axialOcclusion: string | null;
 };
 
 export type ObliqueSnapshot = {

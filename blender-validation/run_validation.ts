@@ -178,13 +178,13 @@ type Stats = {
 };
 
 function summarize(rows: Row[]): { markdown: string; data: Record<string, unknown> } {
-  const algos: AlgoId[] = ["A", "B", "C", "D", "E", "F"];
+  const algos: AlgoId[] = ["A", "B", "C", "D", "E", "F", "G", "H"];
   const byAlgo: Record<string, Stats> = {};
   for (const algo of algos) {
     byAlgo[algo] = statsFor(rows.filter((r) => r.algo === algo));
   }
 
-  // Prefer hybrid on the hard subset (30–45° + occlusion), not clear-frame MAE alone.
+  // Prefer torso-relative-pelvis / axial yaw on hard subset (30–45° + occlusion).
   const ranked = [...algos].sort((a, b) => {
     const sa = byAlgo[a]!;
     const sb = byAlgo[b]!;
@@ -193,11 +193,10 @@ function summarize(rows: Row[]): { markdown: string; data: Record<string, unknow
   });
   const bestAlgo = ranked[0]!;
 
-  // World-landmark estimators are camera-invariant in this lab. Rank cameras by how
-  // often geometric depth-occlusion of the far shoulder occurs at 40° torso (clear MP).
+  // Rank cameras for recovering axial torso yaw (algo H) with usable near-shoulder geometry.
   const camScores: Array<{ yaw: number; mae: number; maeOcc: number; mae3045: number; note: string }> = [];
   for (const yaw of CAMERA_YAWS) {
-    const subset = rows.filter((r) => r.algo === "F" && r.cameraYawDeg === yaw && r.truePelvisDeg === 0);
+    const subset = rows.filter((r) => r.algo === "H" && r.cameraYawDeg === yaw && r.truePelvisDeg === 0);
     const s = statsFor(subset);
     // Prefer mid-oblique: enough to keep near shoulder dominant, not so extreme that hips foreshorten.
     const geometryPenalty = Math.abs(yaw - 37.5);

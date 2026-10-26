@@ -5,7 +5,7 @@
 
 import type { LandmarkName, PoseLandmarks, ProjectedPose, V3 } from "./synthetic_rig";
 
-export type AlgoId = "A" | "B" | "C" | "D" | "E" | "F";
+export type AlgoId = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H";
 
 export type Calibration = {
   frozenHipAxis: { x: number; z: number };
@@ -80,8 +80,10 @@ export function estimateAll(
     trustedShoulder: useBoth ? "both" : directionPrimary(opts.direction),
   };
 
+  const g = algoG(w, cal); // axial torso yaw from baseline (world XZ)
+  const h = algoH(w, cal); // torso relative to locked pelvis
   void opts.expectOcclusion;
-  return [a, b, c, d, e, f];
+  return [a, b, c, d, e, f, g, h];
 }
 
 /** A: traditional shoulder-line yaw change from READY (no frozen hip). */
@@ -219,14 +221,39 @@ function directionPrimary(direction: "left" | "right"): "left" | "right" {
   return direction === "right" ? "left" : "right";
 }
 
+/** G: absolute world shoulder-axis yaw change from READY (axial torso). */
+function algoG(w: PoseLandmarks, cal: Calibration): Estimate {
+  const cur = axisYaw(w.rightShoulder, w.leftShoulder);
+  if (cur == null) return { algo: "G", signedDeg: null, mode: "AXIAL_TORSO_YAW", trustedShoulder: "both" };
+  const base = axisYaw(cal.rightShoulder, cal.leftShoulder);
+  if (base == null) return { algo: "G", signedDeg: null, mode: "AXIAL_TORSO_YAW", trustedShoulder: "both" };
+  return { algo: "G", signedDeg: shortest(cur - base), mode: "AXIAL_TORSO_YAW", trustedShoulder: "both" };
+}
+
+/** H: torso vs LOCKED pelvis axis (zeroed at READY) — primary clinical quantity. */
+function algoH(w: PoseLandmarks, cal: Calibration): Estimate {
+  const curAxis = xz(w.rightShoulder, w.leftShoulder);
+  if (!curAxis) return { algo: "H", signedDeg: null, mode: "TORSO_REL_PELVIS", trustedShoulder: "both" };
+  const rel = signedAngleXZ(cal.frozenHipAxis, curAxis);
+  if (rel == null) return { algo: "H", signedDeg: null, mode: "TORSO_REL_PELVIS", trustedShoulder: "both" };
+  return {
+    algo: "H",
+    signedDeg: rel - cal.startingShoulderToHipOffsetDeg,
+    mode: "TORSO_REL_PELVIS",
+    trustedShoulder: "both",
+  };
+}
+
 export function algoLabel(id: AlgoId): string {
   const map: Record<AlgoId, string> = {
-    A: "Shoulder-line delta",
+    A: "Shoulder-line delta (NOT axial)",
     B: "Shoulder vs frozen hip",
     C: "Visible shoulder only",
-    D: "Torso plane",
+    D: "Torso plane blend",
     E: "Perspective span",
     F: "Hybrid B→C",
+    G: "Axial torso yaw (world XZ)",
+    H: "Torso relative locked pelvis",
   };
   return map[id];
 }

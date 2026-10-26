@@ -18,15 +18,15 @@ import {
   sealHybridBaseline,
   type HybridReadyBaseline,
 } from "./hybridRom";
+import {
+  computeAxialTrunkRom,
+  extractImageSample,
+  sealAxialTrunkBaseline,
+  type AxialTrunkBaseline,
+} from "./axialTrunkRom";
 import { AngleSmoother, isSpike } from "./temporal";
 import { detectChinSnap, validateFrame } from "./validation";
 import { hipVector, shoulderVector } from "./vectors";
-import {
-  computeCvDiagnostics,
-  extractImageSample,
-  sealImageBaseline,
-  type ImageBaseline,
-} from "./cvDiagnostics";
 import { scoreTrialConfidence } from "./trialConfidence";
 import type { TrialFrameSample, TlTrialRecord } from "./trialTypes";
 import type {
@@ -122,6 +122,18 @@ const EMPTY_FRAME: FrameDebug = {
   worldRightShoulder: null,
   worldLeftHip: null,
   worldRightHip: null,
+  baselineTorsoYawDeg: null,
+  currentTorsoYawDeg: null,
+  torsoRotationFromBaselineDeg: null,
+  baselinePelvisYawDeg: null,
+  currentPelvisYawDeg: null,
+  pelvisRotationFromBaselineDeg: null,
+  torsoRelativePelvisDeg: null,
+  depthDiffYawDeg: null,
+  foreshorteningDeg: null,
+  visibleShoulderOrbitDeg: null,
+  axialSelectedSource: null,
+  axialOcclusion: null,
 };
 
 /**
@@ -139,10 +151,11 @@ export class ObliqueSession {
   private baseline: ObliqueBaseline | null = null;
   /** HARD 0° origin — sealed at READY. Never rewritten mid-trial. */
   private readyBaseline: HybridReadyBaseline | null = null;
-  /** Image-space baseline sealed at READY (frozen). */
-  private imageBaseline: ImageBaseline | null = null;
-  /** Frozen hip reference at READY — logged each frame to prove it never moves. */
+  /** Primary axial trunk / pelvis baseline — sealed at READY, frozen. */
+  private axialBaseline: AxialTrunkBaseline | null = null;
+  /** Frozen hip / torso yaw at READY — logged each frame to prove it never moves. */
   private lockedFrozenHipRef: number | null = null;
+  private lockedTorsoYaw: number | null = null;
   /** Old shoulder→hipMid arc baseline (debug comparison only). */
   private oldPivotBaseline: OldPivotBaseline | null = null;
   private collector = new BaselineCollector();
@@ -230,11 +243,24 @@ export class ObliqueSession {
     if (!this.baseline || this.result || this.movementStarted || this.countdownEndsAt != null) return;
     if (this.state !== "WAITING_FOR_READY" && this.state !== "READY_CONFIRMING") return;
     if (!this.lastSample) return;
-    // HARD ZERO: frozen hip + shoulders at READY become the 0° origin.
+    // HARD ZERO: locked pelvis + torso axial orientation at READY = 0°.
+    const imageSample = this.lastImage ? extractImageSample(this.lastImage) : null;
+    const axial = sealAxialTrunkBaseline(this.lastSample, imageSample, this.direction, now);
+    if (!axial) return;
+    this.axialBaseline = axial;
+    this.lockedFrozenHipRef = axial.pelvisYawDeg;
+    this.lockedTorsoYaw = axial.torsoYawDeg;
+    Object.freeze(axial);
+    Object.freeze(axial.pelvisAxis);
+    Object.freeze(axial.torsoAxis);
+    Object.freeze(axial.leftHip);
+    Object.freeze(axial.rightHip);
+    Object.freeze(axial.leftShoulder);
+    Object.freeze(axial.rightShoulder);
+
+    // Keep hybrid baseline for side-by-side debug comparison only.
     const sealed = sealHybridBaseline(this.lastSample, this.direction, now);
-    if (!sealed) return;
     this.readyBaseline = sealed;
-    this.lockedFrozenHipRef = sealed.frozenHipReferenceDeg;
     this.oldPivotBaseline = sealReadyBaseline(this.lastSample, this.direction, now);
     if (this.lastImage && this.lastImage.length > LM.rightHip) {
       const li = this.lastImage[LM.leftHip];
@@ -243,12 +269,8 @@ export class ObliqueSession {
         left: { x: li.x, y: li.y },
         right: { x: ri.x, y: ri.y },
       };
-      const imageSample = extractImageSample(this.lastImage);
-      this.imageBaseline = imageSample ? sealImageBaseline(imageSample, this.direction, now) : null;
-      if (this.imageBaseline) Object.freeze(this.imageBaseline);
     } else {
       this.frozenHipImage = null;
-      this.imageBaseline = null;
     }
     this.rawPeak = 0;
     this.filteredPeak = 0;
@@ -260,15 +282,15 @@ export class ObliqueSession {
     this.samples = [];
     this.voiceLatch = true;
     this.note("BASELINE CAPTURED", now);
-    // Freeze hip axis object so accidental mutation is visible/hard.
-    Object.freeze(sealed.frozenHipAxis);
-    Object.freeze(sealed.baselineLeftHip);
-    Object.freeze(sealed.baselineRightHip);
+    if (sealed) {
+      Object.freeze(sealed.frozenHipAxis);
+      Object.freeze(sealed.baselineLeftHip);
+      Object.freeze(sealed.baselineRightHip);
+    }
     console.log(
-      `[oblique] BASELINE LOCKED direction=${this.direction} ` +
-        `FROZEN hip ref=${sealed.frozenHipReferenceDeg.toFixed(1)}° ` +
-        `start shoulder=${sealed.startingShoulderAngleDeg.toFixed(1)}° ` +
-        `offset=${sealed.startingShoulderToHipOffsetDeg.toFixed(1)}° → TL ROM 0.0°`
+      `[oblique] BASELINE LOCKED axial trunk · direction=${this.direction} ` +
+        `pelvisYaw=${axial.pelvisYawDeg.toFixed(1)}° torsoYaw=${axial.torsoYawDeg.toFixed(1)}° ` +
+        `torsoVsPelvis=${axial.torsoVsPelvisOffsetDeg.toFixed(1)}° → ROM 0.0°`
     );
     if (this.config.countdownMs <= 0) {
       this.beginMeasuring(now);
@@ -294,8 +316,9 @@ export class ObliqueSession {
     this.smoother.reset();
     this.baseline = null;
     this.readyBaseline = null;
-    this.imageBaseline = null;
+    this.axialBaseline = null;
     this.lockedFrozenHipRef = null;
+    this.lockedTorsoYaw = null;
     this.oldPivotBaseline = null;
     this.lastSample = null;
     this.lastImage = null;
@@ -312,8 +335,9 @@ export class ObliqueSession {
     this.smoother.reset();
     this.baseline = null;
     this.readyBaseline = null;
-    this.imageBaseline = null;
+    this.axialBaseline = null;
     this.lockedFrozenHipRef = null;
+    this.lockedTorsoYaw = null;
     this.oldPivotBaseline = null;
     this.lastSample = null;
     this.lastImage = null;
@@ -381,24 +405,33 @@ export class ObliqueSession {
       return this.snapshot(frame.image, now, frameDebug, null);
     }
 
-    // Guard: frozen hip axis + sealed baseline must never move after READY.
-    if (this.readyBaseline && this.lockedFrozenHipRef != null) {
-      const hx = this.readyBaseline.frozenHipAxis.x;
-      const hz = this.readyBaseline.frozenHipAxis.z;
-      if (!Number.isFinite(hx) || !Number.isFinite(hz)) {
-        console.error("[oblique] FROZEN hip axis corrupted");
-      }
-      if (this.readyBaseline.frozenHipReferenceDeg !== this.lockedFrozenHipRef) {
+    // Guard: sealed axial baseline must never move after READY.
+    if (this.axialBaseline && this.lockedTorsoYaw != null && this.lockedFrozenHipRef != null) {
+      if (this.axialBaseline.torsoYawDeg !== this.lockedTorsoYaw) {
         console.error(
-          `[oblique] BASELINE DRIFT DETECTED locked=${this.lockedFrozenHipRef} now=${this.readyBaseline.frozenHipReferenceDeg}`
+          `[oblique] TORSO BASELINE DRIFT locked=${this.lockedTorsoYaw} now=${this.axialBaseline.torsoYawDeg}`
+        );
+      }
+      if (this.axialBaseline.pelvisYawDeg !== this.lockedFrozenHipRef) {
+        console.error(
+          `[oblique] PELVIS BASELINE DRIFT locked=${this.lockedFrozenHipRef} now=${this.axialBaseline.pelvisYawDeg}`
         );
       }
     }
 
     const occ = this.occlusion.apply(rawSample, this.direction, this.baseline, this.config);
     const chinSide = detectChinSnap(rawSample, this.baseline, this.config);
-    // Hybrid: both-shoulder vs frozen hip while reliable; visible-shoulder when far side fails.
-    // Live hip landmarks do NOT enter the ROM zero reference.
+    const imageSample = this.lastImage ? extractImageSample(this.lastImage) : null;
+
+    // PRIMARY: axial trunk rotation (world XZ torso/pelvis). 2D slope is diagnostic only.
+    const axial = this.axialBaseline
+      ? computeAxialTrunkRom(rawSample, imageSample, this.axialBaseline, {
+          minConfidence: this.config.landmarkConfidence,
+          softConfidence: this.config.softLandmarkConfidence,
+        })
+      : null;
+
+    // Legacy hybrid kept for debug comparison only — does NOT drive Raw Max.
     const reading = this.readyBaseline
       ? computeHybridRom(rawSample, this.readyBaseline, this.direction, this.oldPivotBaseline, {
           leftChinSnap: chinSide === "left",
@@ -414,24 +447,12 @@ export class ObliqueSession {
           bothShoulderRomDeg: null,
           selectedRawRomDeg: null,
         };
-    const hybridDirectional = this.readyBaseline
-      ? directionalRom(reading.selectedRawRomDeg ?? reading.currentRawRomDeg, this.direction)
-      : null;
-    const imageSample = this.lastImage ? extractImageSample(this.lastImage) : null;
-    const cv = computeCvDiagnostics({
-      worldSample: rawSample,
-      imageSample,
-      worldBaseline: this.readyBaseline,
-      imageBaseline: this.imageBaseline,
-      direction: this.direction,
-      hybridSelectedDeg: hybridDirectional,
-    });
-    // Drive live ROM from selected estimator (may fall back to image orbit when world under-reports).
-    let rawRom = this.readyBaseline ? directionalRom(cv.selectedDeg, this.direction) : null;
-    this.lastEstimatorSource = cv.selectedSource;
 
-    // Occlusion hold: if far shoulder fails and estimate collapses >40% vs last good, hold briefly.
-    const farUnreliable = reading.hybridMode === "VISIBLE_SHOULDER" || occ.occlusionActive;
+    let rawRom = axial ? directionalRom(axial.selectedRomDeg, this.direction) : null;
+    this.lastEstimatorSource = axial?.selectedSource ?? "none";
+
+    // Occlusion hold: far shoulder loss is expected — don't let ROM collapse to ~0.
+    const farUnreliable = axial?.occlusion !== "none" && axial?.occlusion != null;
     if (
       this.movementStarted &&
       farUnreliable &&
@@ -441,16 +462,16 @@ export class ObliqueSession {
       rawRom < this.lastRaw * 0.55
     ) {
       this.heldRom = this.lastRaw;
-      this.heldRomUntil = now + 450;
+      this.heldRomUntil = now + 500;
     }
     if (this.heldRom != null && now <= this.heldRomUntil && (rawRom == null || rawRom < this.heldRom)) {
       rawRom = this.heldRom;
-      this.lastEstimatorSource = `${cv.selectedSource}+hold`;
+      this.lastEstimatorSource = `${axial?.selectedSource ?? "axial"}+hold`;
     } else if (now > this.heldRomUntil) {
       this.heldRom = null;
     }
 
-    const displayRaw = this.readyBaseline ? rawRom : 0;
+    const displayRaw = this.axialBaseline ? rawRom : 0;
 
     const spike = this.movementStarted && rawRom != null && isSpike(this.lastRaw, rawRom, dt, this.config);
     const validation = validateFrame({
@@ -502,12 +523,17 @@ export class ObliqueSession {
     this.logEvery += 1;
     if (this.logEvery % 12 === 0) {
       console.log(
-        `[oblique] state=${this.state} trial=${this.direction} mode=${reading.hybridMode} src=${cv.selectedSource}\n` +
-          `BASELINE ${cv.baselineLocked ? "LOCKED" : "open"} frozenHip:${this.lockedFrozenHipRef?.toFixed(1)}\n` +
-          `A hybrid:${cv.existingHybridDeg?.toFixed(1)} B 2dLine:${cv.shoulderLine2dDeg?.toFixed(1)} ` +
-          `C world:${cv.worldAxisYawDeg?.toFixed(1)} D imgOrbit:${cv.imagePrimaryOrbitDeg?.toFixed(1)}\n` +
-          `signedWorld:${cv.worldSignedUnclampedDeg?.toFixed(1)} SELECTED:${displayRaw?.toFixed(1)} max:${this.rawPeak?.toFixed(1)}\n` +
-          `trusted:${reading.trustedShoulder} liveHipDev:${reading.liveHipDeviationDeg?.toFixed(1)}`
+        `[oblique] state=${this.state} trial=${this.direction} src=${axial?.selectedSource ?? "none"}\n` +
+          `BASELINE ${this.axialBaseline ? "LOCKED" : "open"} ` +
+          `torso0=${this.lockedTorsoYaw?.toFixed(1)} pelvis0=${this.lockedFrozenHipRef?.toFixed(1)}\n` +
+          `2D slope(diag):${axial?.shoulderSlope2dDeg?.toFixed(1)} ` +
+          `torsoΔ:${axial?.worldTorsoYawFromBaselineDeg?.toFixed(1)} ` +
+          `pelvisΔ:${axial?.worldPelvisYawFromBaselineDeg?.toFixed(1)} ` +
+          `torsoRelPelvis:${axial?.torsoRelativePelvisDeg?.toFixed(1)}\n` +
+          `depth:${axial?.depthDiffYawDeg?.toFixed(1)} foreshort:${axial?.foreshorteningDeg?.toFixed(1)} ` +
+          `visOrbit:${axial?.visibleShoulderOrbitDeg?.toFixed(1)} imgOrbit:${axial?.imagePrimaryOrbitDeg?.toFixed(1)}\n` +
+          `SELECTED:${displayRaw?.toFixed(1)} max:${this.rawPeak?.toFixed(1)} occ:${axial?.occlusion ?? "—"} ` +
+          `W LS z=${rawSample.leftShoulder.z.toFixed(3)} RS z=${rawSample.rightShoulder.z.toFixed(3)}`
       );
     }
 
@@ -516,12 +542,19 @@ export class ObliqueSession {
     }
 
     const conf = this.confidencePct();
+    const trusted =
+      axial?.trustedShoulder ??
+      (reading.trustedShoulder as FrameDebug["reliableShoulder"]);
     const frameDebug = this.debugFrame(
       rawSample,
       reading,
-      reading.hybridMode === "VISIBLE_SHOULDER" ? "SINGLE_SHOULDER_ASSISTED" : occ.mode,
-      reading.hybridMode === "VISIBLE_SHOULDER" || occ.occlusionActive,
-      reading.trustedShoulder,
+      axial?.occlusion !== "none" && axial?.occlusion
+        ? "SINGLE_SHOULDER_ASSISTED"
+        : occ.mode,
+      Boolean(axial?.occlusion && axial.occlusion !== "none") || occ.occlusionActive,
+      trusted === "left" || trusted === "right" || trusted === "both" || trusted === "none"
+        ? trusted
+        : "none",
       occ.leftReconstructed,
       occ.rightReconstructed,
       validation.validity,
@@ -529,28 +562,46 @@ export class ObliqueSession {
     );
     frameDebug.rawRom = displayRaw;
     frameDebug.filteredRom = filtered;
-    frameDebug.maxRawRom = this.readyBaseline ? this.rawPeak : 0;
+    frameDebug.maxRawRom = this.axialBaseline ? this.rawPeak : 0;
     frameDebug.maxValidRom = this.validPeak;
     frameDebug.hybridMode = reading.hybridMode;
     frameDebug.bothShoulderRomDeg = reading.bothShoulderRomDeg;
     frameDebug.visibleShoulderRomDeg = reading.visibleShoulderRomDeg;
     frameDebug.rejectedOutlier = validation.validity === "reject" || spike;
     frameDebug.maxFilteredRom = this.filteredPeak;
-    frameDebug.estimatorExistingDeg = cv.existingHybridDeg;
-    frameDebug.estimator2dLineDeg = cv.shoulderLine2dDeg;
-    frameDebug.estimatorWorldYawDeg = cv.worldAxisYawDeg;
-    frameDebug.estimatorImageOrbitDeg = cv.imagePrimaryOrbitDeg;
+    frameDebug.estimatorExistingDeg = reading.selectedRawRomDeg;
+    frameDebug.estimator2dLineDeg = axial?.shoulderSlope2dDeg ?? null;
+    frameDebug.estimatorWorldYawDeg = axial?.worldTorsoYawFromBaselineDeg ?? null;
+    frameDebug.estimatorImageOrbitDeg = axial?.imagePrimaryOrbitDeg ?? null;
     frameDebug.estimatorSelectedSource = this.lastEstimatorSource;
-    frameDebug.worldSignedUnclampedDeg = cv.worldSignedUnclampedDeg;
-    frameDebug.baselineLocked = cv.baselineLocked;
-    frameDebug.imageLeftShoulder = cv.imageCoords?.leftShoulder ?? null;
-    frameDebug.imageRightShoulder = cv.imageCoords?.rightShoulder ?? null;
-    frameDebug.imageLeftHip = cv.imageCoords?.leftHip ?? null;
-    frameDebug.imageRightHip = cv.imageCoords?.rightHip ?? null;
-    frameDebug.worldLeftShoulder = cv.worldCoords?.leftShoulder ?? null;
-    frameDebug.worldRightShoulder = cv.worldCoords?.rightShoulder ?? null;
-    frameDebug.worldLeftHip = cv.worldCoords?.leftHip ?? null;
-    frameDebug.worldRightHip = cv.worldCoords?.rightHip ?? null;
+    frameDebug.worldSignedUnclampedDeg = axial?.signedAxialDeg ?? null;
+    frameDebug.baselineLocked = this.axialBaseline != null;
+    frameDebug.imageLeftShoulder = axial?.image?.leftShoulder ?? null;
+    frameDebug.imageRightShoulder = axial?.image?.rightShoulder ?? null;
+    frameDebug.imageLeftHip = axial?.image?.leftHip ?? null;
+    frameDebug.imageRightHip = axial?.image?.rightHip ?? null;
+    frameDebug.worldLeftShoulder = axial?.world.leftShoulder ?? rawSample.leftShoulder;
+    frameDebug.worldRightShoulder = axial?.world.rightShoulder ?? rawSample.rightShoulder;
+    frameDebug.worldLeftHip = axial?.world.leftHip ?? rawSample.leftHip;
+    frameDebug.worldRightHip = axial?.world.rightHip ?? rawSample.rightHip;
+    frameDebug.baselineTorsoYawDeg = axial?.baselineTorsoYawDeg ?? null;
+    frameDebug.currentTorsoYawDeg = axial?.currentTorsoYawDeg ?? null;
+    frameDebug.torsoRotationFromBaselineDeg = axial?.worldTorsoYawFromBaselineDeg ?? null;
+    frameDebug.baselinePelvisYawDeg = axial?.baselinePelvisYawDeg ?? null;
+    frameDebug.currentPelvisYawDeg = axial?.currentPelvisYawDeg ?? null;
+    frameDebug.pelvisRotationFromBaselineDeg = axial?.worldPelvisYawFromBaselineDeg ?? null;
+    frameDebug.torsoRelativePelvisDeg = axial?.torsoRelativePelvisDeg ?? null;
+    frameDebug.depthDiffYawDeg = axial?.depthDiffYawDeg ?? null;
+    frameDebug.foreshorteningDeg = axial?.foreshorteningDeg ?? null;
+    frameDebug.visibleShoulderOrbitDeg = axial?.visibleShoulderOrbitDeg ?? null;
+    frameDebug.axialSelectedSource = axial?.selectedSource ?? null;
+    frameDebug.axialOcclusion = axial?.occlusion ?? null;
+    // Overlay frozen hip from axial baseline when available.
+    if (this.axialBaseline && !frameDebug.frozenLeftHip) {
+      frameDebug.frozenLeftHip = this.axialBaseline.leftHip;
+      frameDebug.frozenRightHip = this.axialBaseline.rightHip;
+      frameDebug.frozenHipReferenceDeg = this.axialBaseline.pelvisYawDeg;
+    }
 
     if (this.movementStarted && this.state === "MEASURING" && this.startedAt != null) {
       this.samples.push({
@@ -576,17 +627,17 @@ export class ObliqueSession {
         rightShoulderConfidence: vis(rawSample.rightShoulder),
         leftHipConfidence: vis(rawSample.leftHip),
         rightHipConfidence: vis(rawSample.rightHip),
-        measurementMode: reading.hybridMode,
-        trustedShoulder: String(reading.trustedShoulder),
+        measurementMode: axial?.selectedSource ?? reading.hybridMode,
+        trustedShoulder: String(axial?.trustedShoulder ?? reading.trustedShoulder),
         isOutlier: validation.validity === "reject" || spike,
-        occlusionState: reading.hybridMode === "VISIBLE_SHOULDER" || occ.occlusionActive ? "far_unreliable" : "clear",
+        occlusionState: axial?.occlusion && axial.occlusion !== "none" ? axial.occlusion : "clear",
         rejectReason: spike ? "Angle spike" : validation.reason,
-        estimatorHybridDeg: cv.existingHybridDeg,
-        estimator2dLineDeg: cv.shoulderLine2dDeg,
-        estimatorWorldYawDeg: cv.worldAxisYawDeg,
-        estimatorImageOrbitDeg: cv.imagePrimaryOrbitDeg,
+        estimatorHybridDeg: reading.selectedRawRomDeg,
+        estimator2dLineDeg: axial?.shoulderSlope2dDeg ?? null,
+        estimatorWorldYawDeg: axial?.worldTorsoYawFromBaselineDeg ?? null,
+        estimatorImageOrbitDeg: axial?.imagePrimaryOrbitDeg ?? null,
         estimatorSelectedSource: this.lastEstimatorSource,
-        worldSignedUnclampedDeg: cv.worldSignedUnclampedDeg,
+        worldSignedUnclampedDeg: axial?.signedAxialDeg ?? null,
       });
     }
 
@@ -787,8 +838,9 @@ export class ObliqueSession {
     this.samples = [];
     this.lastShoulders = null;
     this.readyBaseline = null;
-    this.imageBaseline = null;
+    this.axialBaseline = null;
     this.lockedFrozenHipRef = null;
+    this.lockedTorsoYaw = null;
     this.oldPivotBaseline = null;
     this.frozenHipImage = null;
     this.result = null;
@@ -870,8 +922,9 @@ export class ObliqueSession {
     if (!sample) {
       return {
         ...EMPTY_FRAME,
-        baselineSealed: this.readyBaseline != null,
-        readyBaselineCaptured: this.readyBaseline != null,
+        baselineSealed: this.axialBaseline != null,
+        readyBaselineCaptured: this.axialBaseline != null,
+        baselineLocked: this.axialBaseline != null,
         primaryLandmark: primarySide(this.direction),
         comparisonLandmark: comparisonSide(this.direction),
       };
@@ -905,7 +958,7 @@ export class ObliqueSession {
       occlusionActive,
       leftReconstructed: leftRecon,
       rightReconstructed: rightRecon,
-      baselineSealed: this.readyBaseline != null,
+      baselineSealed: this.axialBaseline != null,
       primaryLandmark: primarySide(this.direction),
       comparisonLandmark: comparisonSide(this.direction),
       primaryConfidence: reading.leftShoulderConfidence,
@@ -915,7 +968,7 @@ export class ObliqueSession {
       primaryChangeFromBaselineDeg: reading.signedTlRotationDeg,
       comparisonChangeDeg: reading.liveHipDeviationDeg,
       pelvisSubtractDeg: 0,
-      readyBaselineCaptured: this.readyBaseline != null,
+      readyBaselineCaptured: this.axialBaseline != null,
       absoluteShoulderYawDeg: reading.currentShoulderAngleDeg,
       baselineShoulderYawDeg: reading.startingShoulderAngleDeg,
       shoulderYawChangeDeg: reading.signedTlRotationDeg,
@@ -939,7 +992,7 @@ export class ObliqueSession {
       bothShoulderRomDeg: reading.bothShoulderRomDeg ?? null,
       visibleShoulderRomDeg: reading.visibleShoulderRomDeg ?? null,
       rejectedOutlier: validity === "reject",
-      baselineLocked: this.readyBaseline != null,
+      baselineLocked: this.axialBaseline != null,
     };
   }
 
